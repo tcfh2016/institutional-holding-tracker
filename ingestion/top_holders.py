@@ -9,9 +9,24 @@ import pandas as pd
 import akshare as ak
 
 from ingestion.base import retry_on_error, safe_request
-from database.db_manager import upsert_df, get_max_date
+from database.db_manager import query_sql, upsert_df
 
 logger = logging.getLogger(__name__)
+
+
+def _has_top_holders_data(stock_code: str, report_date: str, is_float: bool) -> bool:
+    """判断指定股票、报告期和股东口径是否已有数据。"""
+    db_report_date = pd.to_datetime(report_date, format="%Y%m%d").strftime("%Y-%m-%d")
+    rows = query_sql(
+        """
+        SELECT 1
+        FROM top_holders
+        WHERE stock_code = ? AND report_date = ? AND is_float_holder = ?
+        LIMIT 1
+        """,
+        (stock_code, db_report_date, 1 if is_float else 0),
+    )
+    return bool(rows)
 
 
 def _add_exchange_prefix(stock_code: str) -> str:
@@ -47,10 +62,16 @@ def fetch_top_holders_em(stock_code: str, report_date: str, is_float: bool = Fal
         else:
             df = safe_request(ak.stock_gdfx_top_10_em, symbol=symbol, date=report_date)
     except Exception as e:
-        logger.warning(f"[TopHolders] EM fetch failed for {stock_code} {report_date}: {e}")
+        holder_type = "十大流通股东" if is_float else "十大股东"
+        logger.warning(
+            f"[TopHolders] {holder_type} unavailable for {stock_code} "
+            f"{report_date}; treat as no data: {type(e).__name__}: {e}"
+        )
         return pd.DataFrame()
     
     if df is None or df.empty:
+        holder_type = "十大流通股东" if is_float else "十大股东"
+        logger.info(f"[TopHolders] No {holder_type} data for {stock_code} {report_date}")
         return pd.DataFrame()
     
     return df
@@ -128,7 +149,12 @@ def _normalize_top_holders_df(df: pd.DataFrame, stock_code: str, report_date: st
     return df[required_cols]
 
 
-def ingest_top_holders(stock_codes: list, report_dates: List[str], is_float: bool = False):
+def ingest_top_holders(
+    stock_codes: list,
+    report_dates: List[str],
+    is_float: bool = False,
+    force_refresh: bool = False,
+):
     """
     批量采集十大股东/十大流通股东数据
     report_dates: YYYYMMDD 格式列表，如 ['20250331', '20241231']
@@ -137,32 +163,53 @@ def ingest_top_holders(stock_codes: list, report_dates: List[str], is_float: boo
     logger.info(f"[TopHolders] Start ingesting {holder_type_str} for {len(stock_codes)} stocks x {len(report_dates)} dates...")
     
     total = 0
+    no_data = 0
+    errors = 0
+    skipped = 0
     for i, code in enumerate(stock_codes, 1):
         for date in report_dates:
             try:
+                if not force_refresh and _has_top_holders_data(code, date, is_float):
+                    skipped += 1
+                    logger.info(
+                        f"[TopHolders] Skip existing data for {code} {date} "
+                        f"({holder_type_str})"
+                    )
+                    continue
+
                 df = fetch_top_holders_em(code, date, is_float=is_float)
                 if df.empty:
+                    no_data += 1
                     continue
                 
                 df = _normalize_top_holders_df(df, code, date, is_float)
                 if df.empty:
+                    no_data += 1
                     continue
                 
                 upsert_df(df, "top_holders", ["stock_code", "report_date", "holder_name", "is_float_holder"])
                 total += len(df)
                 
             except Exception as e:
+                errors += 1
                 logger.error(f"[TopHolders] Error processing {code} {date}: {e}")
                 continue
         
         if i % 20 == 0:
             logger.info(f"[TopHolders] Progress: {i}/{len(stock_codes)}, total records: {total}")
     
-    logger.info(f"[TopHolders] Ingestion completed. Total records: {total}")
+    logger.info(
+        f"[TopHolders] Ingestion completed. Total records: {total}; "
+        f"no data: {no_data}; skipped: {skipped}; processing errors: {errors}"
+    )
     return total
 
 
-def ingest_all_top_holders(stock_codes: list, report_dates: List[str] = None):
+def ingest_all_top_holders(
+    stock_codes: list,
+    report_dates: List[str] = None,
+    force_refresh: bool = False,
+):
     """
     采集十大股东和十大流通股东
     report_dates: 默认采集最近一个季报期
@@ -171,5 +218,9 @@ def ingest_all_top_holders(stock_codes: list, report_dates: List[str] = None):
         # 默认采集最近一期季报，可根据实际情况调整
         report_dates = ["20250331"]
     
-    ingest_top_holders(stock_codes, report_dates, is_float=False)
-    ingest_top_holders(stock_codes, report_dates, is_float=True)
+    ingest_top_holders(
+        stock_codes, report_dates, is_float=False, force_refresh=force_refresh
+    )
+    ingest_top_holders(
+        stock_codes, report_dates, is_float=True, force_refresh=force_refresh
+    )

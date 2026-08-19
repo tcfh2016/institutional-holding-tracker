@@ -29,7 +29,7 @@ logging.basicConfig(
 logger = logging.getLogger("main")
 
 
-def run_pipeline(stages: list = None):
+def run_pipeline(stages: list = None, force_refresh: bool = False):
     """
     执行完整数据流水线
     stages: 指定要运行的阶段，None 表示全部运行
@@ -70,9 +70,13 @@ def run_pipeline(stages: list = None):
         logger.info("\n[3/9] 采集十大股东/十大流通股东...")
         # 为演示速度，这里只取前 50 只作为示例
         # 实际使用时可以去掉切片
-        sample_codes = stock_codes[:50]
+        sample_codes = stock_codes
         logger.info(f"    本次采样 {len(sample_codes)} 只股票（演示模式）")
-        ingest_all_top_holders(sample_codes, report_dates=["20250331", "20241231"])
+        ingest_all_top_holders(
+            sample_codes,
+            report_dates=["20241231"],
+            force_refresh=force_refresh,
+        )
     
     # 4. 采集北向资金
     if "northbound" in stages:
@@ -131,6 +135,11 @@ if __name__ == "__main__":
                         "prices", "classify", "analyze", "report", "alert"],
                         help="指定要运行的阶段，不指定则运行全部")
     parser.add_argument("--init-only", action="store_true", help="仅初始化数据库和映射表")
+    parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help="重新请求已存在的十大股东数据",
+    )
     
     args = parser.parse_args()
     
@@ -139,6 +148,6 @@ if __name__ == "__main__":
         init_holder_mappings()
         logger.info("✅ 数据库和映射表初始化完成")
     elif args.stage:
-        run_pipeline(stages=args.stage)
+        run_pipeline(stages=args.stage, force_refresh=args.force_refresh)
     else:
-        run_pipeline()
+        run_pipeline(force_refresh=args.force_refresh)
