@@ -1,0 +1,34 @@
+# Python cache and tooling
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+
+# Local runtime data
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+data/logs/*
+data/reports/*
+
+# Secrets and local configuration
+*.pem
+*.key
+*secret*
+*credentials*
+
+# Notebook runtime output
+.ipynb_checkpoints/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
