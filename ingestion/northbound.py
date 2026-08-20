@@ -10,6 +10,7 @@ import akshare as ak
 
 from ingestion.base import retry_on_error, safe_request
 from database.db_manager import upsert_df, get_max_date
+from ingestion.market_data import get_stock_name
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,9 @@ def ingest_northbound(stock_codes: list = None, days_back: int = 30):
             
             # 添加 stock_code
             df["stock_code"] = code
-            df["stock_name"] = None
+            df["stock_name"] = get_stock_name(code)
+            if df["stock_name"].isna().all():
+                logger.warning(f"[Northbound] No stock name found for {code}")
             
             # 日期过滤
             df = df[(df["trade_date"] >= start_date) & (df["trade_date"] <= end_date)]

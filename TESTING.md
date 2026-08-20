@@ -10,6 +10,7 @@
 help        检查命令行入口，不访问网络
 init        初始化数据库和股东识别规则
 index       采集沪深300、中证500、创业板指和科创50的成分股
+stocks      从指数成分股同步股票基础信息
 holders     采集十大股东和十大流通股东
 classify    对股东名称进行机构分类
 northbound  采集北向资金个股持股数据
@@ -120,7 +121,21 @@ python -c "import sqlite3; c=sqlite3.connect('data/institutional_holding.db'); p
 
 不同指数之间可能有重复股票，因此各指数数量相加后会大于去重后的股票总数。
 
-### 5. 小样本采集十大股东
+### 5. 同步股票基础信息
+
+指数成分股已经包含股票代码和名称。主流程会在 `index` 后自动同步这些信息；也可以单独执行：
+
+```powershell
+python -u main.py --stage stocks 2>&1 | Tee-Object -FilePath data\logs\stocks_test.log
+```
+
+检查股票主数据：
+
+```powershell
+python -c "import sqlite3; c=sqlite3.connect('data/institutional_holding.db'); print('stocks:', c.execute('SELECT COUNT(*) FROM stocks').fetchone()[0]); print(*c.execute('SELECT stock_code,stock_name FROM stocks ORDER BY stock_code LIMIT 5').fetchall(), sep='\\n'); c.close()"
+```
+
+### 6. 小样本采集十大股东
 
 `main.py` 当前固定使用前 50 只成分股，并采集两个报告期：`20250331` 和 `20241231`。
 
@@ -143,7 +158,7 @@ python -c "import sqlite3; c=sqlite3.connect('data/institutional_holding.db'); p
 
 如果 50 只股票耗时过长，可以先在 Python 交互环境中对 1 只股票、1 个报告期调用 `fetch_top_holders_em()` 做最小探针。
 
-### 6. 股东分类
+### 7. 股东分类
 
 ```powershell
 python -u main.py --stage classify 2>&1 | Tee-Object -FilePath data\logs\classify_test.log
@@ -162,7 +177,7 @@ python -c "import sqlite3; c=sqlite3.connect('data/institutional_holding.db'); p
 - 正则匹配，例如包含 `中证金融资产管理计划` 的名称
 - 未匹配名称应返回 `其他`
 
-### 7. 采集北向资金和行情
+### 8. 采集北向资金和行情
 
 可以先分开运行，便于定位问题：
 

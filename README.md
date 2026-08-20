@@ -72,7 +72,10 @@ python main.py
 # 仅采集指数成分股
 python main.py --stage init index
 
-# 仅采集十大股东
+# 采集指数成分股并同步股票基础信息
+python main.py --stage init index stocks
+
+# 仅采集十大股东（会自动确保股票基础信息已同步）
 python main.py --stage holders classify
 
 # 仅运行分析

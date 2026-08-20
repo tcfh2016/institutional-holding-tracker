@@ -15,7 +15,7 @@ from database.db_manager import init_database
 from ingestion.index_components import ingest_index_components, get_index_stock_codes
 from ingestion.top_holders import ingest_all_top_holders
 from ingestion.northbound import ingest_northbound
-from ingestion.market_data import ingest_daily_prices, ingest_stock_info
+from ingestion.market_data import ingest_daily_prices, sync_stocks_from_index_components
 from cleansing.holder_classifier import init_holder_mappings, update_top_holders_type
 from analysis.holding_changes import compute_all_holding_changes, compute_all_index_summaries
 from reporting.quarterly_report import generate_quarterly_report
@@ -34,7 +34,7 @@ def run_pipeline(stages: list = None, force_refresh: bool = False):
     执行完整数据流水线
     stages: 指定要运行的阶段，None 表示全部运行
     """
-    all_stages = ["init", "index", "holders", "northbound", "prices", 
+    all_stages = ["init", "index", "stocks", "holders", "northbound", "prices", 
                   "classify", "analyze", "report", "alert"]
     stages = stages or all_stages
     
@@ -64,47 +64,50 @@ def run_pipeline(stages: list = None, force_refresh: bool = False):
     if not stock_codes:
         logger.error("❌ 没有获取到任何成分股代码，流水线终止。")
         return
+
+    if "stocks" in stages or "holders" in stages or "northbound" in stages:
+        logger.info("\n[3/10] 同步股票基础信息...")
+        sync_stocks_from_index_components()
     
     # 3. 采集十大股东
     if "holders" in stages:
-        logger.info("\n[3/9] 采集十大股东/十大流通股东...")
+        logger.info("\n[4/10] 采集十大股东/十大流通股东...")
         # 为演示速度，这里只取前 50 只作为示例
         # 实际使用时可以去掉切片
         sample_codes = stock_codes
         logger.info(f"    本次采样 {len(sample_codes)} 只股票（演示模式）")
         ingest_all_top_holders(
             sample_codes,
-            report_dates=["20241231"],
+            report_dates=["20260331"],
             force_refresh=force_refresh,
         )
     
     # 4. 采集北向资金
     if "northbound" in stages:
-        logger.info("\n[4/9] 采集北向资金...")
+        logger.info("\n[5/10] 采集北向资金...")
         sample_codes = stock_codes[:50]
         ingest_northbound(stock_codes=sample_codes, days_back=30)
     
     # 5. 采集行情数据
     if "prices" in stages:
-        logger.info("\n[5/9] 采集日度行情...")
+        logger.info("\n[6/10] 采集日度行情...")
         sample_codes = stock_codes[:50]
         ingest_daily_prices(sample_codes, days_back=90)
-        ingest_stock_info()
     
     # 6. 股东分类
     if "classify" in stages:
-        logger.info("\n[6/9] 股东识别与分类...")
+        logger.info("\n[7/10] 股东识别与分类...")
         update_top_holders_type()
     
     # 7. 持仓变化分析
     if "analyze" in stages:
-        logger.info("\n[7/9] 计算持仓变化...")
+        logger.info("\n[8/10] 计算持仓变化...")
         compute_all_holding_changes()
         compute_all_index_summaries()
     
     # 8. 生成报告
     if "report" in stages:
-        logger.info("\n[8/9] 生成季度报告...")
+        logger.info("\n[9/10] 生成季度报告...")
         from analysis.holding_changes import get_report_dates
         dates = get_report_dates()
         if len(dates) >= 2:
@@ -116,7 +119,7 @@ def run_pipeline(stages: list = None, force_refresh: bool = False):
     
     # 9. 运行预警
     if "alert" in stages:
-        logger.info("\n[9/9] 运行预警规则...")
+        logger.info("\n[10/10] 运行预警规则...")
         from analysis.holding_changes import get_report_dates
         dates = get_report_dates()
         if dates:
@@ -132,7 +135,7 @@ def run_pipeline(stages: list = None, force_refresh: bool = False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="A股大机构持仓跟踪系统")
     parser.add_argument("--stage", nargs="+", choices=["init", "index", "holders", "northbound", 
-                        "prices", "classify", "analyze", "report", "alert"],
+                        "stocks", "holders", "northbound", "prices", "classify", "analyze", "report", "alert"],
                         help="指定要运行的阶段，不指定则运行全部")
     parser.add_argument("--init-only", action="store_true", help="仅初始化数据库和映射表")
     parser.add_argument(

@@ -7,7 +7,7 @@ import pandas as pd
 import akshare as ak
 
 from ingestion.base import retry_on_error, safe_request
-from database.db_manager import upsert_df
+from database.db_manager import get_connection, query_sql, upsert_df
 
 logger = logging.getLogger(__name__)
 
@@ -151,3 +151,50 @@ def ingest_stock_info():
         logger.error(f"[StockInfo] Ingestion failed: {e}")
     
     return 0
+
+
+def get_stock_name(stock_code: str):
+    """从股票主数据表获取股票名称。"""
+    rows = query_sql(
+        """
+        SELECT stock_name
+        FROM stocks
+        WHERE stock_code = ?
+          AND stock_name IS NOT NULL
+          AND stock_name != ''
+        LIMIT 1
+        """,
+        (stock_code,),
+    )
+    return rows[0]["stock_name"] if rows else None
+
+
+def sync_stocks_from_index_components():
+    """使用已采集的指数成分股信息初始化股票主数据。"""
+    rows = query_sql(
+        """
+        SELECT stock_code, stock_name
+        FROM index_components
+        WHERE stock_code IS NOT NULL
+          AND stock_name IS NOT NULL
+          AND stock_name != ''
+        GROUP BY stock_code
+        ORDER BY stock_code
+        """
+    )
+    if not rows:
+        logger.warning("[StockInfo] No named index components available.")
+        return 0
+
+    with get_connection() as conn:
+        conn.executemany(
+            """
+            INSERT INTO stocks (stock_code, stock_name)
+            VALUES (?, ?)
+            ON CONFLICT(stock_code) DO UPDATE SET stock_name = excluded.stock_name
+            WHERE stocks.stock_name IS NULL OR stocks.stock_name = ''
+            """,
+            [(row["stock_code"], row["stock_name"]) for row in rows],
+        )
+    logger.info(f"[StockInfo] Synced {len(rows)} stocks from index components.")
+    return len(rows)

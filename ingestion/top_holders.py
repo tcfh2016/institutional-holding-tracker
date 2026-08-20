@@ -10,6 +10,7 @@ import akshare as ak
 
 from ingestion.base import retry_on_error, safe_request
 from database.db_manager import query_sql, upsert_df
+from ingestion.market_data import get_stock_name
 
 logger = logging.getLogger(__name__)
 
@@ -101,8 +102,9 @@ def _normalize_top_holders_df(df: pd.DataFrame, stock_code: str, report_date: st
     df["stock_code"] = stock_code
     df["report_date"] = pd.to_datetime(report_date, format="%Y%m%d").strftime("%Y-%m-%d")
     
-    # 尝试从 df 获取 stock_name（没有 stock_name 列，需要另外查）
-    df["stock_name"] = None
+    df["stock_name"] = get_stock_name(stock_code)
+    if df["stock_name"].isna().all():
+        logger.warning(f"[TopHolders] No stock name found for {stock_code}")
     
     # 数值转换
     for col in ["hold_shares", "hold_ratio_total", "hold_ratio_float", "change_ratio"]:
