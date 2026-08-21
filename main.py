@@ -14,7 +14,7 @@ from config.settings import DATA_DIR, TRACKED_INDICES
 from database.db_manager import init_database
 from ingestion.index_components import ingest_index_components, get_index_stock_codes
 from ingestion.top_holders import ingest_all_top_holders
-from ingestion.northbound import ingest_northbound
+from ingestion.institutional_research import ingest_institutional_research
 from ingestion.market_data import ingest_daily_prices, sync_stocks_from_index_components
 from cleansing.holder_classifier import init_holder_mappings, update_top_holders_type
 from analysis.holding_changes import compute_all_holding_changes, compute_all_index_summaries
@@ -29,12 +29,17 @@ logging.basicConfig(
 logger = logging.getLogger("main")
 
 
-def run_pipeline(stages: list = None, force_refresh: bool = False):
+def run_pipeline(
+    stages: list = None,
+    force_refresh: bool = False,
+    research_start_date: str = None,
+    research_end_date: str = None,
+):
     """
     执行完整数据流水线
     stages: 指定要运行的阶段，None 表示全部运行
     """
-    all_stages = ["init", "index", "stocks", "holders", "northbound", "prices", 
+    all_stages = ["init", "index", "stocks", "holders", "research", "prices", 
                   "classify", "analyze", "report", "alert"]
     stages = stages or all_stages
     
@@ -65,7 +70,7 @@ def run_pipeline(stages: list = None, force_refresh: bool = False):
         logger.error("❌ 没有获取到任何成分股代码，流水线终止。")
         return
 
-    if "stocks" in stages or "holders" in stages or "northbound" in stages:
+    if "stocks" in stages or "holders" in stages or "research" in stages:
         logger.info("\n[3/10] 同步股票基础信息...")
         sync_stocks_from_index_components()
     
@@ -78,15 +83,19 @@ def run_pipeline(stages: list = None, force_refresh: bool = False):
         logger.info(f"    本次采样 {len(sample_codes)} 只股票（演示模式）")
         ingest_all_top_holders(
             sample_codes,
-            report_dates=["20260331"],
+            report_dates=["20260630"],
             force_refresh=force_refresh,
         )
     
-    # 4. 采集北向资金
-    if "northbound" in stages:
-        logger.info("\n[5/10] 采集北向资金...")
-        sample_codes = stock_codes[:50]
-        ingest_northbound(stock_codes=sample_codes, days_back=30)
+    # 4. 采集机构调研
+    if "research" in stages:
+        logger.info("\n[5/10] 采集机构调研记录...")
+        ingest_institutional_research(
+            stock_codes=stock_codes,
+            days_back=2,
+            start_date=research_start_date,
+            end_date=research_end_date,
+        )
     
     # 5. 采集行情数据
     if "prices" in stages:
@@ -134,14 +143,22 @@ def run_pipeline(stages: list = None, force_refresh: bool = False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="A股大机构持仓跟踪系统")
-    parser.add_argument("--stage", nargs="+", choices=["init", "index", "holders", "northbound", 
-                        "stocks", "holders", "northbound", "prices", "classify", "analyze", "report", "alert"],
+    parser.add_argument("--stage", nargs="+", choices=["init", "index", "stocks", "holders", "research", 
+                        "prices", "classify", "analyze", "report", "alert"],
                         help="指定要运行的阶段，不指定则运行全部")
     parser.add_argument("--init-only", action="store_true", help="仅初始化数据库和映射表")
     parser.add_argument(
         "--force-refresh",
         action="store_true",
         help="重新请求已存在的十大股东数据",
+    )
+    parser.add_argument(
+        "--research-start-date",
+        help="机构调研历史回补起始日期，格式 YYYYMMDD；查询该日期之后的数据",
+    )
+    parser.add_argument(
+        "--research-end-date",
+        help="机构调研历史回补结束日期，格式 YYYYMMDD；必须晚于起始日期",
     )
     
     args = parser.parse_args()
@@ -151,6 +168,15 @@ if __name__ == "__main__":
         init_holder_mappings()
         logger.info("✅ 数据库和映射表初始化完成")
     elif args.stage:
-        run_pipeline(stages=args.stage, force_refresh=args.force_refresh)
+        run_pipeline(
+            stages=args.stage,
+            force_refresh=args.force_refresh,
+            research_start_date=args.research_start_date,
+            research_end_date=args.research_end_date,
+        )
     else:
-        run_pipeline(force_refresh=args.force_refresh)
+        run_pipeline(
+            force_refresh=args.force_refresh,
+            research_start_date=args.research_start_date,
+            research_end_date=args.research_end_date,
+        )

@@ -1,6 +1,6 @@
 # A股大机构持仓跟踪系统
 
-跟踪国家队、保险资金、社保基金、公募基金、QFII、北向资金等大机构，在沪深300、中证500、创业板指、科创50等核心指数成分股中的持仓变化。
+跟踪国家队、保险资金、社保基金、公募基金、QFII等大机构，在沪深300、中证500、创业板指、科创50等核心指数成分股中的持仓变化，并记录机构调研行为。
 
 ## 功能特性
 
@@ -8,7 +8,7 @@
 - 🏛️ **十大股东追踪**：采集十大股东和十大流通股东明细
 - 🏷️ **智能股东识别**：基于关键词和正则的规则引擎，自动分类机构类型
 - 📈 **持仓变化计算**：识别新进、退出、增持、减持，计算持股市值变动
-- 🌏 **北向资金监控**：日度北向资金个股持股跟踪
+- 🔬 **机构调研记录**：跟踪成分股近期机构调研次数和参与机构
 - ⚠️ **预警规则**：国家队新进/退出、大幅调仓、连续多季变化等自动预警
 - 📑 **季度报告**：自动生成 Markdown 格式的持仓变化分析报告
 - 🖥️ **可视化看板**：Streamlit 交互式看板，支持趋势图、热力图、Treemap
@@ -27,7 +27,7 @@ institutional_holding_tracker/
 │   ├── base.py              # 采集基类（重试、延迟、日志）
 │   ├── index_components.py  # 指数成分股采集
 │   ├── top_holders.py       # 十大股东/流通股东采集
-│   ├── northbound.py        # 北向资金采集
+│   ├── institutional_research.py # 机构调研采集
 │   └── market_data.py       # 行情与股本数据采集
 ├── cleansing/
 │   └── holder_classifier.py # 股东识别与分类规则引擎
@@ -78,6 +78,12 @@ python main.py --stage init index stocks
 # 仅采集十大股东（会自动确保股票基础信息已同步）
 python main.py --stage holders classify
 
+# 采集最近 2 天机构调研，已入库日期会自动跳过
+python main.py --stage research
+
+# 回补指定日期之后的机构调研记录，已存在的日期会自动跳过
+python main.py --stage research --research-start-date 20260818 --research-end-date 20260821
+
 # 仅运行分析
 python main.py --stage analyze report alert
 ```
@@ -96,7 +102,7 @@ streamlit run dashboard/app.py
 - 按报告期和机构类型筛选
 - 个股历史持仓趋势图
 - 国家队持仓 Treemap
-- 北向资金 Top 排名
+- 机构调研活跃个股排名
 - 预警清单
 
 ## 数据源
@@ -107,7 +113,7 @@ streamlit run dashboard/app.py
 |---|---|
 | 指数成分股 | 中证指数官网 / 东方财富 (akshare) |
 | 十大股东/流通股东 | 东方财富 (akshare) |
-| 北向资金 | 东方财富 (akshare) |
+| 机构调研 | 东方财富公开接口 |
 | 日度行情 | 东方财富 / Baostock (akshare) |
 | 股票基础信息 | 东方财富 (akshare) |
 

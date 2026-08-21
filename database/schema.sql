@@ -89,18 +89,22 @@ CREATE TABLE IF NOT EXISTS fund_holdings (
     UNIQUE(report_date, fund_code, stock_code)
 );
 
--- 北向资金持股（日度）
-CREATE TABLE IF NOT EXISTS northbound_holdings (
+-- 机构调研明细
+CREATE TABLE IF NOT EXISTS institutional_research (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     stock_code          TEXT NOT NULL,
     stock_name          TEXT,
-    trade_date          DATE NOT NULL,
-    hold_shares         REAL,               -- 持股数量（股）
-    hold_market_value   REAL,               -- 持股市值（元）
-    hold_ratio          REAL,               -- 占流通A股比例（%）
-    net_buy_shares      REAL,               -- 当日净买入股数
+    survey_date         DATE NOT NULL,
+    notice_date         DATE,
+    institution_name    TEXT NOT NULL,
+    institution_type    TEXT,
+    survey_method       TEXT,
+    survey_place        TEXT,
+    investigators       TEXT,
+    receptionists       TEXT,
+    data_source         TEXT DEFAULT 'akshare',
     created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(stock_code, trade_date)
+    UNIQUE(stock_code, survey_date, notice_date, institution_name)
 );
 
 -- 机构名称映射表（用于股东识别分类）
@@ -163,6 +167,6 @@ CREATE TABLE IF NOT EXISTS alerts (
 CREATE INDEX IF NOT EXISTS idx_th_stock ON top_holders(stock_code, report_date);
 CREATE INDEX IF NOT EXISTS idx_th_type ON top_holders(holder_type, report_date);
 CREATE INDEX IF NOT EXISTS idx_dp_date ON daily_prices(stock_code, trade_date);
-CREATE INDEX IF NOT EXISTS idx_nb_date ON northbound_holdings(stock_code, trade_date);
+CREATE INDEX IF NOT EXISTS idx_research_date ON institutional_research(stock_code, survey_date);
 CREATE INDEX IF NOT EXISTS idx_fh_date ON fund_holdings(report_date, stock_code);
 CREATE INDEX IF NOT EXISTS idx_hcs ON holding_changes_summary(report_date, holder_type);

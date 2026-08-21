@@ -6,13 +6,13 @@
 
 ## 测试范围
 
-```text
+ python -c "import sqlite3; c=sqlite3.connect('data/institutional_holding.db'); print('range:', c.execute('SELECT MIN(survey_date),MAX(survey_date) FROM institutional_research').fetchone()); print('rows:', c.execute('SELECT COUNT(*) FROM institutional_research').fetchone()[0]); print(*c.execute('SELECT stock_code,stock_name,survey_date,institution_name,institution_type FROM institutional_research ORDER BY survey_date DESC LIMIT 5').fetchall(), sep='\\n'); c.close()"
 help        检查命令行入口，不访问网络
 init        初始化数据库和股东识别规则
 index       采集沪深300、中证500、创业板指和科创50的成分股
 stocks      从指数成分股同步股票基础信息
 holders     采集十大股东和十大流通股东
-classify    对股东名称进行机构分类
+research    采集机构调研明细
 northbound  采集北向资金个股持股数据
 prices      采集日度行情和股票基础信息
 analyze     计算持仓变化和指数层面汇总
@@ -24,17 +24,12 @@ alert       执行预警规则并写入数据库
 
 ## 测试前准备
 
-确认 Python 和依赖已安装：
-
+python -u main.py --stage research 2>&1 | Tee-Object -FilePath data\logs\research_test.log
 ```powershell
 python --version
 python -m pip install -r requirements.txt
 ```
 
-确认当前目录是 `institutional_holding_tracker`：
-
-```powershell
-Get-Location
 Test-Path .\main.py
 ```
 
@@ -43,7 +38,7 @@ Test-Path .\main.py
 注意：`config/settings.py` 中当前 `DEMO_MODE = True`。本地行情不存在时，分析模块可能使用可复现的模拟价格；这适合验证程序链路，不应把结果当作真实投资数据。
 
 ## 推荐测试顺序
-
+python -c "import sqlite3; c=sqlite3.connect('data/institutional_holding.db'); print('range:', c.execute('SELECT MIN(survey_date),MAX(survey_date) FROM institutional_research').fetchone()); print('rows:', c.execute('SELECT COUNT(*) FROM institutional_research').fetchone()[0]); print(*c.execute('SELECT stock_code,stock_name,survey_date,institution_name,institution_type FROM institutional_research ORDER BY survey_date DESC LIMIT 5').fetchall(), sep='\\n'); c.close()"
 ### 1. 检查 main.py 入口
 
 ```powershell
@@ -61,7 +56,7 @@ python -u main.py --init-only 2>&1 | Tee-Object -FilePath data\logs\init_test.lo
 成功标准：
 
 - 生成 `data\institutional_holding.db`
-- 日志出现数据库初始化完成
+research    采集机构调研明细
 - `holder_mappings` 中存在默认股东识别规则
 
 检查数据库文件和核心表：
@@ -69,19 +64,22 @@ python -u main.py --init-only 2>&1 | Tee-Object -FilePath data\logs\init_test.lo
 ```powershell
 python -c "import sqlite3; c=sqlite3.connect('data/institutional_holding.db'); print('tables:'); print(*c.execute(\"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name\").fetchall(), sep='\n'); print('holder mappings:', c.execute('SELECT COUNT(*) FROM holder_mappings').fetchone()[0]); c.close()"
 ```
+项目使用公开数据接口。`research`、`holders`、`prices` 和 `index` 阶段需要网络连接，运行时间也会受接口响应速度影响。
 
 ### 3. 测试 AkShare 接口
-
+### 8. 采集机构调研和行情
 这两个脚本是接口探针，当前主要打印返回结果，还没有自动化断言：
 
 ```powershell
+python -u main.py --stage research 2>&1 | Tee-Object -FilePath data\logs\research_test.log
 python test_api.py 2>&1 | Tee-Object -FilePath data\logs\api_test.log
 python test_price.py 2>&1 | Tee-Object -FilePath data\logs\price_api_test.log
 ```
-
+检查机构调研：
 记录以下信息：
 
 - 接口是否可访问
+python -c "import sqlite3; c=sqlite3.connect('data/institutional_holding.db'); print('range:', c.execute('SELECT MIN(survey_date),MAX(survey_date) FROM institutional_research').fetchone()); print('rows:', c.execute('SELECT COUNT(*) FROM institutional_research').fetchone()[0]); print(*c.execute('SELECT stock_code,stock_name,survey_date,institution_name,institution_type FROM institutional_research ORDER BY survey_date DESC LIMIT 5').fetchall(), sep='\\n'); c.close()"
 - 返回行数
 - 返回列名是否包含代码、日期、收盘价或持股数据
 - 是否出现超时、限流、参数错误或接口变更
@@ -177,19 +175,19 @@ python -c "import sqlite3; c=sqlite3.connect('data/institutional_holding.db'); p
 - 正则匹配，例如包含 `中证金融资产管理计划` 的名称
 - 未匹配名称应返回 `其他`
 
-### 8. 采集北向资金和行情
+### 8. 采集机构调研和行情
 
 可以先分开运行，便于定位问题：
 
 ```powershell
-python -u main.py --stage northbound 2>&1 | Tee-Object -FilePath data\logs\northbound_test.log
+python -u main.py --stage research 2>&1 | Tee-Object -FilePath data\logs\research_test.log
 python -u main.py --stage prices 2>&1 | Tee-Object -FilePath data\logs\prices_test.log
 ```
 
-检查北向资金：
+检查机构调研：
 
 ```powershell
-python -c "import sqlite3; c=sqlite3.connect('data/institutional_holding.db'); print('range:', c.execute('SELECT MIN(trade_date),MAX(trade_date) FROM northbound_holdings').fetchone()); print('rows:', c.execute('SELECT COUNT(*) FROM northbound_holdings').fetchone()[0]); print(*c.execute('SELECT stock_code,trade_date,hold_shares,hold_market_value,hold_ratio,net_buy_shares FROM northbound_holdings ORDER BY trade_date DESC LIMIT 5').fetchall(), sep='\n'); c.close()"
+python -c "import sqlite3; c=sqlite3.connect('data/institutional_holding.db'); print('range:', c.execute('SELECT MIN(survey_date),MAX(survey_date) FROM institutional_research').fetchone()); print('rows:', c.execute('SELECT COUNT(*) FROM institutional_research').fetchone()[0]); print(*c.execute('SELECT stock_code,stock_name,survey_date,institution_name,institution_type FROM institutional_research ORDER BY survey_date DESC LIMIT 5').fetchall(), sep='\\n'); c.close()"
 ```
 
 检查行情：
@@ -199,6 +197,16 @@ python -c "import sqlite3; c=sqlite3.connect('data/institutional_holding.db'); p
 ```
 
 重点检查日期是否有效、价格和数量列是否为数值，以及唯一键是否生效。
+
+机构调研会根据数据库中的最大 `survey_date` 增量采集：已有数据已覆盖当天时不会发起网络请求；首次采集默认回补最近 2 天。
+
+如需主动回补其他日期，可显式指定起始日期。下面命令查询 2026-08-18 之后的调研记录，并按已有唯一键写入数据库：
+
+```powershell
+python -u main.py --stage research --research-start-date 20260818 --research-end-date 20260821
+```
+
+历史回补模式会逐日检查 `institutional_research.survey_date`：数据库已有该日期记录时跳过网络请求，缺少该日期时才请求，不依赖额外的窗口日志表。
 
 ### 8. 执行持仓变化分析
 

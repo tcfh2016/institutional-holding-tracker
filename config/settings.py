@@ -34,7 +34,7 @@ UPDATE_SCHEDULE = {
     "index_components": "0 9 1 * *",      # 每月1日检查指数成分股
     "top_holders": "0 10 1 5,9,11 *",    # 季报后：5月、9月、11月初
     "fund_holdings": "0 10 20 5,9,11 *", # 季报后15个工作日左右
-    "northbound": "0 18 * * 1-5",        # 工作日收盘后
+    "research": "0 18 * * 1-5",          # 工作日收盘后
     "market_data": "0 18 * * 1-5",       # 工作日收盘后
 }
 
@@ -52,5 +52,4 @@ ALERT_THRESHOLDS = {
     "single_holder_change_ratio": 0.30,   # 单机构单季变动比例 >30%
     "index_holder_change_value_billion": 10,  # 指数内某类机构合计变动 >10亿
     "consecutive_quarters": 2,            # 连续季度数
-    "northbound_weekly_net_buy_billion": 50,  # 北向周度净买入 >50亿
 }

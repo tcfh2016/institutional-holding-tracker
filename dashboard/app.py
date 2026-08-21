@@ -23,7 +23,7 @@ init_database()
 # 页面标题
 # ============================================================
 st.title("📊 A股大机构持仓跟踪系统")
-st.caption("跟踪国家队、保险、社保、QFII、北向资金等在核心指数成分股中的持仓变化")
+st.caption("跟踪国家队、保险、社保、QFII等在核心指数成分股中的持仓变化，并关注机构调研行为")
 
 # ============================================================
 # 侧边栏
@@ -55,7 +55,7 @@ selected_index = st.sidebar.selectbox(
 # 主页面 - Tab 布局
 # ============================================================
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📈 持仓总览", "🔎 个股查询", "🏛️ 国家队", "🌏 北向资金", "⚠️ 预警"
+    "📈 持仓总览", "🔎 个股查询", "🏛️ 国家队", "🔬 机构调研", "⚠️ 预警"
 ])
 
 # ---------- Tab 1: 持仓总览 ----------
@@ -166,11 +166,11 @@ with tab3:
         else:
             st.info("暂无国家队持仓数据。")
 
-# ---------- Tab 4: 北向资金 ----------
+# ---------- Tab 4: 机构调研 ----------
 with tab4:
-    st.subheader("🌏 北向资金持股")
+    st.subheader("🔬 机构调研记录")
     
-    latest_sql = "SELECT MAX(trade_date) as max_date FROM northbound_holdings"
+    latest_sql = "SELECT MAX(survey_date) as max_date FROM institutional_research"
     latest = query_df(latest_sql)
     latest_date = latest.iloc[0]["max_date"] if not latest.empty else None
     
@@ -178,28 +178,29 @@ with tab4:
         st.caption(f"数据截至: {latest_date}")
         
         sql = """
-            SELECT stock_code, stock_name, hold_market_value, hold_ratio, net_buy_shares
-            FROM northbound_holdings
-            WHERE trade_date = ?
-            ORDER BY hold_market_value DESC
+            SELECT stock_code, stock_name, COUNT(*) AS survey_count,
+                   COUNT(DISTINCT institution_name) AS institution_count,
+                   MAX(survey_date) AS latest_survey_date
+            FROM institutional_research
+            GROUP BY stock_code, stock_name
+            ORDER BY survey_count DESC, institution_count DESC
             LIMIT 100
         """
-        df_nb = query_df(sql, (latest_date,))
+        df_nb = query_df(sql)
         
         if not df_nb.empty:
-            df_nb["mv_亿"] = df_nb["hold_market_value"] / 1e8
-            
-            fig = px.bar(df_nb.head(30), x="stock_name", y="mv_亿", 
-                        color="hold_ratio",
-                        title="北向资金持股市值 Top 30",
-                        labels={"stock_name": "股票", "mv_亿": "持股市值(亿)"})
+            fig = px.bar(df_nb.head(30), x="stock_name", y="survey_count",
+                        color="institution_count",
+                        title="机构调研次数 Top 30",
+                        labels={"stock_name": "股票", "survey_count": "调研次数",
+                                "institution_count": "机构数量"})
             st.plotly_chart(fig, width='stretch')
             
             st.dataframe(df_nb, width='stretch')
         else:
-            st.info("暂无北向资金数据。")
+            st.info("暂无机构调研数据。")
     else:
-        st.info("暂无北向资金数据，请先运行采集。")
+        st.info("暂无机构调研数据，请先运行采集。")
 
 # ---------- Tab 5: 预警 ----------
 with tab5:

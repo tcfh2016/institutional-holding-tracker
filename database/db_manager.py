@@ -45,6 +45,8 @@ def init_database():
     conn = sqlite3.connect(db_path)
     try:
         conn.executescript(sql)
+        conn.execute("DROP TABLE IF EXISTS northbound_holdings")
+        conn.execute("DROP TABLE IF EXISTS institutional_research_fetch_log")
         conn.commit()
         print(f"[DB] Database initialized at {db_path}")
     finally:

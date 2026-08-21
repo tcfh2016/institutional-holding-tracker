@@ -1,20 +1,18 @@
-import akshare as ak
+from datetime import datetime, timedelta
 
-# 测试北向资金历史
-print("=== stock_hsgt_hist_em('北向资金') ===")
-try:
-    df = ak.stock_hsgt_hist_em(symbol="北向资金")
-    print(f"Success! Shape: {df.shape}, Columns: {list(df.columns)}")
-    print(df.head(3))
-    print(df.tail(3))
-except Exception as e:
-    print(f"Error: {e}")
+from ingestion.institutional_research import fetch_institutional_research
 
-# 测试个股北向
-print("\n=== stock_hsgt_individual_em('000001') ===")
+
+start_date = (datetime.now() - timedelta(days=2)).strftime("%Y%m%d")
+print(f"=== institutional research since {start_date} ===")
 try:
-    df = ak.stock_hsgt_individual_em(symbol="000001")
+    df = fetch_institutional_research(start_date)
     print(f"Success! Shape: {df.shape}, Columns: {list(df.columns)}")
-    print(df.head(3))
+    if not df.empty:
+        print(f"Latest survey date: {df['调研日期'].max()}")
+        print(df.head(3))
+        print(df.tail(3))
+    else:
+        print("No records returned.")
 except Exception as e:
     print(f"Error: {e}")

@@ -161,29 +161,32 @@ def generate_quarterly_report(report_date: str, output_path: Optional[str] = Non
     
     lines.append("\n---\n")
     
-    # 6. 北向资金（日度最新）
-    lines.append("## 六、北向资金最新持股\n")
+    # 6. 机构调研记录
+    lines.append("## 六、机构调研活跃个股\n")
     sql = """
-        SELECT stock_code, stock_name, trade_date, 
-               hold_market_value, hold_ratio, net_buy_shares
-        FROM northbound_holdings
-        WHERE trade_date = (SELECT MAX(trade_date) FROM northbound_holdings)
-        ORDER BY hold_market_value DESC
+        SELECT stock_code, stock_name,
+               COUNT(*) AS survey_count,
+               COUNT(DISTINCT institution_name) AS institution_count,
+               MAX(survey_date) AS latest_survey_date
+        FROM institutional_research
+        GROUP BY stock_code, stock_name
+        ORDER BY survey_count DESC, institution_count DESC
         LIMIT 20
     """
-    df_nb = query_df(sql)
-    if not df_nb.empty:
-        latest_date = df_nb.iloc[0]["trade_date"]
-        lines.append(f"*数据截至：{latest_date}*\n")
-        lines.append("| 股票代码 | 股票名称 | 持股市值 | 占流通比 | 当日净买入 |")
+    df_research = query_df(sql)
+    if not df_research.empty:
+        latest_date = df_research["latest_survey_date"].max()
+        lines.append(f"*数据截至：{latest_date}；以下为调研记录，不代表实际持仓。*\n")
+        lines.append("| 股票代码 | 股票名称 | 调研次数 | 机构数量 | 最近调研日期 |")
         lines.append("|---|---|---|---|---|")
-        for _, row in df_nb.iterrows():
-            mv = _format_billion(row["hold_market_value"])
-            ratio = f"{row['hold_ratio']:.2f}%" if pd.notna(row["hold_ratio"]) else "N/A"
-            net = _format_million(row["net_buy_shares"] * 1)  # 简化，实际应乘股价
-            lines.append(f"| {row['stock_code']} | {row['stock_name']} | {mv} | {ratio} | {net} |")
+        for _, row in df_research.iterrows():
+            lines.append(
+                f"| {row['stock_code']} | {row['stock_name']} | "
+                f"{row['survey_count']} | {row['institution_count']} | "
+                f"{row['latest_survey_date']} |"
+            )
     else:
-        lines.append("> 暂无北向资金数据。\n")
+        lines.append("> 暂无机构调研数据。\n")
     
     lines.append("\n---\n")
     
