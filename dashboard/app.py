@@ -13,6 +13,7 @@ import plotly.express as px
 from database.db_manager import query_df, init_database
 from reporting.quarterly_report import generate_quarterly_report
 from config.settings import TRACKED_INDICES
+from analysis.research_candidates import get_research_candidates
 
 st.set_page_config(page_title="A股大机构持仓跟踪", layout="wide")
 
@@ -169,6 +170,7 @@ with tab3:
 # ---------- Tab 4: 机构调研 ----------
 with tab4:
     st.subheader("🔬 机构调研记录")
+    st.caption("调研活跃度仅反映公开调研行为，不代表实际持仓或投资建议。")
     
     latest_sql = "SELECT MAX(survey_date) as max_date FROM institutional_research"
     latest = query_df(latest_sql)
@@ -201,6 +203,13 @@ with tab4:
             st.info("暂无机构调研数据。")
     else:
         st.info("暂无机构调研数据，请先运行采集。")
+
+    st.subheader("🌟 非成分股调研活跃候选")
+    candidate_df = get_research_candidates(days=30)
+    if not candidate_df.empty:
+        st.dataframe(candidate_df.head(50), width="stretch")
+    else:
+        st.info("近30天暂无满足条件的非成分股调研候选。")
 
 # ---------- Tab 5: 预警 ----------
 with tab5:

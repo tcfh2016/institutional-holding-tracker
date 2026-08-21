@@ -12,7 +12,7 @@ init        初始化数据库和股东识别规则
 index       采集沪深300、中证500、创业板指和科创50的成分股
 stocks      从指数成分股同步股票基础信息
 holders     采集十大股东和十大流通股东
-research    采集机构调研明细
+research    采集全市场机构调研明细
 northbound  采集北向资金个股持股数据
 prices      采集日度行情和股票基础信息
 analyze     计算持仓变化和指数层面汇总
@@ -64,7 +64,7 @@ research    采集机构调研明细
 ```powershell
 python -c "import sqlite3; c=sqlite3.connect('data/institutional_holding.db'); print('tables:'); print(*c.execute(\"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name\").fetchall(), sep='\n'); print('holder mappings:', c.execute('SELECT COUNT(*) FROM holder_mappings').fetchone()[0]); c.close()"
 ```
-项目使用公开数据接口。`research`、`holders`、`prices` 和 `index` 阶段需要网络连接，运行时间也会受接口响应速度影响。
+项目使用公开数据接口。`research`、`holders`、`prices` 和 `index` 阶段需要网络连接，运行时间也会受接口响应速度影响。`research` 默认保存全市场数据。
 
 ### 3. 测试 AkShare 接口
 ### 8. 采集机构调研和行情
@@ -198,7 +198,7 @@ python -c "import sqlite3; c=sqlite3.connect('data/institutional_holding.db'); p
 
 重点检查日期是否有效、价格和数量列是否为数值，以及唯一键是否生效。
 
-机构调研会根据数据库中的最大 `survey_date` 增量采集：已有数据已覆盖当天时不会发起网络请求；首次采集默认回补最近 2 天。
+机构调研默认保存全市场数据，并根据数据库中的 `survey_date` 增量采集：已有日期时不会发起网络请求；首次采集默认回补最近 2 天。
 
 如需主动回补其他日期，可显式指定起始日期。下面命令查询 2026-08-18 之后的调研记录，并按已有唯一键写入数据库：
 
@@ -207,6 +207,8 @@ python -u main.py --stage research --research-start-date 20260818 --research-end
 ```
 
 历史回补模式会逐日检查 `institutional_research.survey_date`：数据库已有该日期记录时跳过网络请求，缺少该日期时才请求，不依赖额外的窗口日志表。
+
+若历史日期之前只保存过指数成分股，需要使用 `--research-full-market` 强制重新请求这些日期，补齐非成分股记录。唯一键会阻止已有明细重复写入。
 
 ### 8. 执行持仓变化分析
 

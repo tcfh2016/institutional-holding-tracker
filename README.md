@@ -78,11 +78,14 @@ python main.py --stage init index stocks
 # 仅采集十大股东（会自动确保股票基础信息已同步）
 python main.py --stage holders classify
 
-# 采集最近 2 天机构调研，已入库日期会自动跳过
+# 采集最近 2 天全市场机构调研，已入库日期会自动跳过
 python main.py --stage research
 
-# 回补指定日期之后的机构调研记录，已存在的日期会自动跳过
+# 重新补齐指定日期的全市场机构调研记录
 python main.py --stage research --research-start-date 20260818 --research-end-date 20260821
+
+# 补齐过去只保存成分股时遗漏的非成分股调研记录
+python main.py --stage research --research-full-market --research-start-date 20260531 --research-end-date 20260821
 
 # 仅运行分析
 python main.py --stage analyze report alert
@@ -102,7 +105,8 @@ streamlit run dashboard/app.py
 - 按报告期和机构类型筛选
 - 个股历史持仓趋势图
 - 国家队持仓 Treemap
-- 机构调研活跃个股排名
+- 全市场机构调研活跃个股排名
+- 非指数成分股机构调研活跃候选
 - 预警清单
 
 ## 数据源

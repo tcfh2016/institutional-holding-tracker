@@ -9,6 +9,7 @@ import pandas as pd
 
 from database.db_manager import query_df
 from config.settings import TRACKED_INDICES
+from analysis.research_candidates import get_research_candidates
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +188,21 @@ def generate_quarterly_report(report_date: str, output_path: Optional[str] = Non
             )
     else:
         lines.append("> 暂无机构调研数据。\n")
+
+    lines.append("\n### 非指数成分股调研活跃候选\n")
+    candidate_df = get_research_candidates(days=30)
+    if not candidate_df.empty:
+        lines.append("> 以下仅表示公开调研活跃度，不代表投资建议。\n")
+        lines.append("| 股票代码 | 股票名称 | 调研次数 | 机构数量 | 质量机构数 | 活跃评分 |")
+        lines.append("|---|---|---|---|---|---|")
+        for _, row in candidate_df.head(20).iterrows():
+            lines.append(
+                f"| {row['stock_code']} | {row['stock_name']} | "
+                f"{row['survey_count']} | {row['institution_count']} | "
+                f"{row['quality_institution_count']} | {row['score']:.3f} |"
+            )
+    else:
+        lines.append("> 近30天暂无满足条件的非指数成分股候选。\n")
     
     lines.append("\n---\n")
     

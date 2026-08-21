@@ -1,6 +1,9 @@
 from datetime import datetime, timedelta
 
-from ingestion.institutional_research import fetch_institutional_research
+from ingestion.institutional_research import (
+    _normalize_research_df,
+    fetch_institutional_research,
+)
 
 
 start_date = (datetime.now() - timedelta(days=2)).strftime("%Y%m%d")
@@ -9,9 +12,10 @@ try:
     df = fetch_institutional_research(start_date)
     print(f"Success! Shape: {df.shape}, Columns: {list(df.columns)}")
     if not df.empty:
-        print(f"Latest survey date: {df['调研日期'].max()}")
-        print(df.head(3))
-        print(df.tail(3))
+        normalized = _normalize_research_df(df)
+        print(f"Latest survey date: {normalized['survey_date'].max()}")
+        print(normalized.head(3))
+        print(normalized.tail(3))
     else:
         print("No records returned.")
 except Exception as e:

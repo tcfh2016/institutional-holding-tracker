@@ -179,12 +179,14 @@ def ingest_institutional_research(
     days_back: int = 30,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    full_market: bool = True,
+    force_full_market: bool = False,
 ) -> int:
-    """采集调研记录，可选指定日期范围和股票代码过滤。"""
+    """采集全市场调研记录，可选按股票代码过滤。"""
     today = datetime.now().date()
     historical_mode = start_date is not None
     code_set = None
-    if stock_codes is not None:
+    if not full_market and stock_codes is not None:
         code_set = {str(code).zfill(6) for code in stock_codes}
 
     if start_date is not None:
@@ -275,7 +277,7 @@ def ingest_institutional_research(
                 WHERE survey_date = ?
                 """,
                 (query_date.isoformat(),),
-            ) if table_exists("institutional_research") else []
+            ) if table_exists("institutional_research") and not force_full_market else []
             if existing_rows and existing_rows[0]["row_count"] > 0:
                 logger.info(
                     f"[Research] Date {query_date_text} already exists in database; "
