@@ -20,6 +20,7 @@ from cleansing.holder_classifier import init_holder_mappings, update_top_holders
 from analysis.holding_changes import compute_all_holding_changes, compute_all_index_summaries
 from reporting.quarterly_report import generate_quarterly_report
 from alerting.rules import run_all_alerts
+from database.integrity_check import run_integrity_check
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,7 +44,7 @@ def run_pipeline(
     stages: 指定要运行的阶段，None 表示全部运行
     """
     all_stages = ["init", "index", "stocks", "holders", "research", "prices", 
-                  "classify", "analyze", "report", "alert"]
+                  "classify", "analyze", "report", "alert", "check"]
     stages = stages or all_stages
     
     logger.info("=" * 60)
@@ -138,11 +139,16 @@ def run_pipeline(
     
     # 9. 运行预警
     if "alert" in stages:
-        logger.info("\n[10/10] 运行预警规则...")
+        logger.info("\n[10/11] 运行预警规则...")
         from analysis.holding_changes import get_report_dates
         dates = get_report_dates()
         if dates:
             run_all_alerts(dates[-1])
+    
+    # 10. 数据完整性检查
+    if "check" in stages:
+        logger.info("\n[11/11] 数据完整性检查...")
+        run_integrity_check()
     
     logger.info("\n" + "=" * 60)
     logger.info("✅ 流水线执行完毕")
@@ -154,8 +160,9 @@ def run_pipeline(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="A股大机构持仓跟踪系统")
     parser.add_argument("--stage", nargs="+", choices=["init", "index", "stocks", "holders", "research", 
-                        "prices", "classify", "analyze", "report", "alert"],
+                        "prices", "classify", "analyze", "report", "alert", "check"],
                         help="指定要运行的阶段，不指定则运行全部")
+    parser.add_argument("--check", action="store_true", help="仅运行数据完整性检查（等价于 --stage check）")
     parser.add_argument("--init-only", action="store_true", help="仅初始化数据库和映射表")
     parser.add_argument(
         "--force-refresh",
@@ -186,7 +193,9 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    if args.init_only:
+    if args.check:
+        run_integrity_check()
+    elif args.init_only:
         init_database()
         init_holder_mappings()
         logger.info("✅ 数据库和映射表初始化完成")

@@ -14,10 +14,10 @@ init        初始化数据库和股东识别规则
 index       采集沪深300、中证500、创业板指和科创50的成分股
 stocks      从指数成分股同步股票基础信息
 holders     采集十大股东和十大流通股东
+classify    股东识别与分类（基金、社保、QFII、保险等）
 research    采集全市场机构调研明细
-northbound  采集北向资金个股持股数据
 prices      采集日度行情和股票基础信息
-analyze     计算持仓变化和指数层面汇总
+analyze     计算持仓变化和指数层面汇总（依赖 classify 结果）
 report      生成季度 Markdown 报告
 alert       执行预警规则并写入数据库
 ```
@@ -35,7 +35,7 @@ python -m pip install -r requirements.txt
 Test-Path .\\main.py
 ```
 
-项目使用 AkShare 访问公开数据接口。`northbound`、`holders`、`prices` 和 `index` 阶段需要网络连接，运行时间也会受接口响应速度影响。
+项目使用 AkShare 访问公开数据接口。`research`、`holders`、`prices` 和 `index` 阶段需要网络连接，运行时间也会受接口响应速度影响。
 
 注意：`config/settings.py` 中当前 `DEMO_MODE = True`。本地行情不存在时，分析模块可能使用可复现的模拟价格；这适合验证程序链路，不应把结果当作真实投资数据。
 
@@ -416,7 +416,7 @@ python -c "import sqlite3; c=sqlite3.connect('data/institutional_holding.db'); p
 
 ### 没有获取到任何成分股
 
-先检查 `index_test.log` 和 `test_api.py` 的输出，再判断是网络不可用、AkShare 接口变更、返回列名变化还是数据库写入失败。后续 `holders`、`northbound` 和 `prices` 都依赖 `index_components`，没有成分股时不应继续排查分析模块。
+先检查 `index_test.log` 和 `test_api.py` 的输出，再判断是网络不可用、AkShare 接口变更、返回列名变化还是数据库写入失败。后续 `holders`、`research` 和 `prices` 都依赖 `index_components`，没有成分股时不应继续排查分析模块。
 
 ### 分析没有生成结果
 

@@ -215,13 +215,27 @@ with tab4:
 with tab5:
     st.subheader("⚠️ 预警清单")
     
-    sql = """
-        SELECT alert_time, alert_level, alert_type, stock_code, stock_name, holder_type, message
-        FROM alerts
-        ORDER BY alert_time DESC
-        LIMIT 100
-    """
-    df_alert = query_df(sql)
+    # 等级筛选
+    level_options = ["全部", "紧急", "重要", "普通"]
+    selected_level = st.selectbox("预警等级", level_options, index=0)
+    
+    if selected_level == "全部":
+        sql = """
+            SELECT alert_time, alert_level, alert_type, stock_code, stock_name, holder_type, message
+            FROM alerts
+            ORDER BY 
+                CASE alert_level WHEN '紧急' THEN 1 WHEN '重要' THEN 2 WHEN '普通' THEN 3 END,
+                alert_time DESC
+        """
+        df_alert = query_df(sql)
+    else:
+        sql = """
+            SELECT alert_time, alert_level, alert_type, stock_code, stock_name, holder_type, message
+            FROM alerts
+            WHERE alert_level = ?
+            ORDER BY alert_time DESC
+        """
+        df_alert = query_df(sql, (selected_level,))
     
     if not df_alert.empty:
         def highlight_level(val):
@@ -231,7 +245,7 @@ with tab5:
                 return "background-color: #ffe6cc"
             return ""
         
-        styled = df_alert.style.applymap(highlight_level, subset=["alert_level"])
+        styled = df_alert.style.map(highlight_level, subset=["alert_level"])
         st.dataframe(styled, width='stretch')
     else:
         st.info("暂无预警记录。")

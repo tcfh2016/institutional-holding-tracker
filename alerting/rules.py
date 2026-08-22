@@ -147,20 +147,69 @@ def check_consecutive_changes(report_date: str, n_quarters: int = 2) -> List[Dic
     return alerts
 
 
+def repair_null_stock_names() -> int:
+    """
+    修复 alerts 表中 stock_name 为 NULL 的记录，
+    从 holding_changes_summary 中补充正确的股票名称。
+    """
+    sql = """
+        UPDATE alerts
+        SET stock_name = (
+            SELECT hcs.stock_name
+            FROM holding_changes_summary hcs
+            WHERE hcs.stock_code = alerts.stock_code
+              AND hcs.holder_type = alerts.holder_type
+              AND hcs.stock_name IS NOT NULL
+            LIMIT 1
+        )
+        WHERE alerts.stock_name IS NULL
+          AND alerts.stock_code IS NOT NULL
+    """
+    count = execute_sql(sql)
+    if count > 0:
+        logger.info(f"[Alert] Repaired {count} alerts with NULL stock_name.")
+    return count
+
+
 def run_all_alerts(report_date: str) -> List[Dict]:
     """
-    运行所有预警规则，返回预警列表并写入数据库
+    运行所有预警规则，返回预警列表并写入数据库。
+    已有相同内容的预警不会重复写入。
     """
     logger.info(f"[Alert] Running all alert checks for {report_date}...")
-    
+
+    # 先修复历史 NULL stock_name
+    repair_null_stock_names()
+
     all_alerts = []
     all_alerts.extend(check_single_stock_alert(report_date))
     all_alerts.extend(check_national_team_new_exit(report_date))
     all_alerts.extend(check_index_level_change(report_date))
     all_alerts.extend(check_consecutive_changes(report_date))
-    
-    # 写入数据库
+
+    # 写入数据库：跳过已存在的相同预警
+    inserted = 0
+    skipped = 0
     for alert in all_alerts:
+        # 用 (alert_type, stock_code, holder_type, message) 作为去重键
+        check_sql = """
+            SELECT COUNT(*) as cnt FROM alerts
+            WHERE alert_type = ?
+              AND (stock_code = ? OR (stock_code IS NULL AND ? IS NULL))
+              AND (holder_type = ? OR (holder_type IS NULL AND ? IS NULL))
+              AND message = ?
+        """
+        params = (
+            alert["alert_type"],
+            alert.get("stock_code"), alert.get("stock_code"),
+            alert.get("holder_type"), alert.get("holder_type"),
+            alert["message"],
+        )
+        result = query_df(check_sql, params)
+        if result.iloc[0]["cnt"] > 0:
+            skipped += 1
+            continue
+
         sql = """
             INSERT INTO alerts (alert_type, alert_level, stock_code, stock_name, holder_type, message)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -170,6 +219,7 @@ def run_all_alerts(report_date: str) -> List[Dict]:
             alert.get("stock_code"), alert.get("stock_name"),
             alert.get("holder_type"), alert["message"]
         ))
-    
-    logger.info(f"[Alert] Total alerts generated: {len(all_alerts)}")
+        inserted += 1
+
+    logger.info(f"[Alert] Total alerts generated: {len(all_alerts)}, inserted: {inserted}, skipped (duplicate): {skipped}")
     return all_alerts

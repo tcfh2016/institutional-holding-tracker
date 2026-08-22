@@ -127,11 +127,14 @@ def compute_holding_changes(report_date: str, prev_report_date: str):
     exit_df["stock_name"] = None
     
     if not exit_df.empty:
-        # 补充 stock_name
+        # 补充 stock_name：先删掉全 None 的列，避免 merge 产生 _x/_y 后缀
+        exit_df = exit_df.drop(columns=["stock_name"])
         name_map = query_df("SELECT DISTINCT stock_code, stock_name FROM top_holders WHERE report_date=?", 
                            (prev_report_date,))
         if not name_map.empty:
             exit_df = exit_df.merge(name_map, on="stock_code", how="left")
+        else:
+            exit_df["stock_name"] = None
         merged = pd.concat([merged, exit_df], ignore_index=True)
     
     # 计算变化
