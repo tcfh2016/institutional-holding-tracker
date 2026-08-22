@@ -140,9 +140,12 @@ def compute_holding_changes(report_date: str, prev_report_date: str):
     # 计算变化
     merged["change_shares"] = merged["hold_shares"] - merged["prev_hold_shares"]
     
-    # 持股市值
+    # 持股市值（退出记录用上一期持股数，反映退出前的实际持仓规模）
+    merged["effective_shares"] = merged.apply(
+        lambda row: row["hold_shares"] if row["hold_shares"] > 0 else row["prev_hold_shares"], axis=1
+    )
     merged["total_hold_market_value"] = merged.apply(
-        lambda row: row["hold_shares"] * get_close_price(row["stock_code"], report_date), axis=1
+        lambda row: row["effective_shares"] * get_close_price(row["stock_code"], report_date), axis=1
     )
     merged["change_market_value"] = merged.apply(
         lambda row: row["change_shares"] * get_close_price(row["stock_code"], report_date), axis=1

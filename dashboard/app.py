@@ -136,16 +136,57 @@ with tab3:
     st.subheader("🏛️ 国家队持仓监控")
     
     if selected_date:
+        # 变动状态筛选
+        status_options = ["全部", "新进", "退出", "增持", "减持", "不变"]
+        selected_status = st.multiselect("变动状态", status_options, default=["全部"])
+        
+        # 报告期多选（默认选中当前选定的报告期）
+        all_report_dates = available_dates  # 从侧边栏获取所有可用报告期
+        selected_dates = st.multiselect(
+            "选择报告期", 
+            all_report_dates, 
+            default=[selected_date],
+            help="可以选择多个报告期进行对比分析"
+        )
+        
+        status_filter = ""
+        if selected_status and "全部" not in selected_status:
+            placeholders = ",".join(["?"] * len(selected_status))
+            status_filter = f" AND change_status IN ({placeholders})"
+        elif not selected_status:
+            # 用户未选择任何状态，显示空结果
+            st.info("请选择至少一种变动状态。")
+            status_filter = " AND 1=0"
+        
+        # 构建报告期筛选条件
+        if selected_dates:
+            date_placeholders = ",".join(["?"] * len(selected_dates))
+            date_filter = f" AND report_date IN ({date_placeholders})"
+        else:
+            # 用户未选择任何报告期，显示空结果
+            st.info("请选择至少一个报告期。")
+            date_filter = " AND 1=0"
+        
         sql = """
             SELECT stock_code, stock_name, holder_type, 
-                   total_market_value, change_market_value, change_status
+                   total_market_value, change_market_value, change_status, report_date
             FROM holding_changes_summary
-            WHERE report_date = ?
-              AND holder_type IN ('证金公司', '汇金公司', '证金资管计划')
-            ORDER BY ABS(change_market_value) DESC
-            LIMIT 50
-        """
-        df_gjd = query_df(sql, (selected_date,))
+            WHERE holder_type IN ('证金公司', '汇金公司', '证金资管计划')
+              {date_filter}
+              {status_filter}
+            ORDER BY report_date DESC, total_market_value DESC
+            LIMIT 200
+        """.format(date_filter=date_filter, status_filter=status_filter)
+        
+        # 构建参数
+        params = []
+        if selected_dates:
+            params.extend(selected_dates)
+        if selected_status and "全部" not in selected_status:
+            params.extend(selected_status)
+        params = tuple(params) if params else ()
+        
+        df_gjd = query_df(sql, params)
         
         if not df_gjd.empty:
             df_gjd["mv_亿"] = df_gjd["total_market_value"] / 1e8
@@ -162,8 +203,9 @@ with tab3:
             else:
                 st.info("暂无国家队持仓个股数据。")
             
-            st.dataframe(df_gjd[["stock_code", "stock_name", "holder_type", "mv_亿", "chg_亿", "change_status"]],
-                        width='stretch')
+            st.dataframe(df_gjd[["stock_code", "stock_name", "holder_type", "mv_亿", "chg_亿", "change_status", "report_date"]].rename(
+                columns={"report_date": "报告期"}
+            ), width='stretch')
         else:
             st.info("暂无国家队持仓数据。")
 
