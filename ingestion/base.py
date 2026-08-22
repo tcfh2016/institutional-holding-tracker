@@ -41,8 +41,12 @@ def retry_on_error(max_retries: int = REQUEST_RETRIES, delay: float = REQUEST_DE
     return decorator
 
 
-def safe_request(func: Callable, *args, **kwargs) -> Any:
-    """安全调用 akshare 接口，带延迟"""
+def safe_request(func: Callable, *args, verbose_error: bool = True,
+                 fail_log_level: int = logging.ERROR, **kwargs) -> Any:
+    """安全调用 akshare 接口，带延迟
+
+    fail_log_level: 失败时使用的日志级别，可设为 logging.WARNING 避免 PowerShell 红色输出
+    """
     start = time.perf_counter()
     logging.info(f"[Request] {func.__name__} started")
     try:
@@ -54,8 +58,10 @@ def safe_request(func: Callable, *args, **kwargs) -> Any:
         return result
     except Exception as e:
         elapsed = time.perf_counter() - start
-        logging.error(
+        logging.log(
+            fail_log_level,
             f"[Request] {func.__name__} failed after {elapsed:.2f}s: {e}",
-            exc_info=True,
         )
+        if verbose_error:
+            logging.debug(f"[Request] {func.__name__} traceback:", exc_info=True)
         raise

@@ -35,6 +35,8 @@ def run_pipeline(
     research_start_date: str = None,
     research_end_date: str = None,
     research_full_market: bool = False,
+    price_start_date: str = None,
+    price_end_date: str = None,
 ):
     """
     执行完整数据流水线
@@ -103,8 +105,13 @@ def run_pipeline(
     # 5. 采集行情数据
     if "prices" in stages:
         logger.info("\n[6/10] 采集日度行情...")
-        sample_codes = stock_codes[:50]
-        ingest_daily_prices(sample_codes, days_back=90)
+        sample_codes = stock_codes[:]
+        ingest_daily_prices(
+            sample_codes,
+            days_back=90,
+            start_date=price_start_date,
+            end_date=price_end_date,
+        )
     
     # 6. 股东分类
     if "classify" in stages:
@@ -168,6 +175,14 @@ if __name__ == "__main__":
         action="store_true",
         help="重新请求指定日期的全市场调研数据，补齐历史遗漏",
     )
+    parser.add_argument(
+        "--price-start-date",
+        help="行情采集起始日期，格式 YYYYMMDD；用于补采历史区间",
+    )
+    parser.add_argument(
+        "--price-end-date",
+        help="行情采集结束日期，格式 YYYYMMDD；默认今天",
+    )
     
     args = parser.parse_args()
     
@@ -182,6 +197,8 @@ if __name__ == "__main__":
             research_start_date=args.research_start_date,
             research_end_date=args.research_end_date,
             research_full_market=args.research_full_market,
+            price_start_date=args.price_start_date,
+            price_end_date=args.price_end_date,
         )
     else:
         run_pipeline(
@@ -189,4 +206,6 @@ if __name__ == "__main__":
             research_start_date=args.research_start_date,
             research_end_date=args.research_end_date,
             research_full_market=args.research_full_market,
+            price_start_date=args.price_start_date,
+            price_end_date=args.price_end_date,
         )

@@ -12,23 +12,38 @@ from database.db_manager import get_connection, query_sql, upsert_df
 logger = logging.getLogger(__name__)
 
 
-@retry_on_error(max_retries=3)
+def _to_sina_symbol(stock_code: str) -> str:
+    """将裸股票代码转换为新浪格式（sz000001 / sh600000）"""
+    if stock_code.startswith(("sh", "sz")):
+        return stock_code
+    if stock_code.startswith(("0", "3")):
+        return f"sz{stock_code}"
+    if stock_code.startswith(("6", "9")):
+        return f"sh{stock_code}"
+    return stock_code
+
+
 def fetch_stock_daily(stock_code: str, start_date: str, end_date: str) -> pd.DataFrame:
-    """获取个股日度行情"""
+    """获取个股日度行情（主接口失败自动切备选）"""
+    # 主接口：新浪（需要带交易所前缀）
     try:
-        # 尝试带 symbol 参数的接口
-        df = safe_request(ak.stock_zh_a_hist, symbol=stock_code, period="daily",
-                          start_date=start_date, end_date=end_date, adjust="qfq")
+        sina_symbol = _to_sina_symbol(stock_code)
+        df = safe_request(ak.stock_zh_a_daily, symbol=sina_symbol,
+                          start_date=start_date, end_date=end_date, adjust="qfq",
+                          verbose_error=False, fail_log_level=logging.WARNING)
+        return df if df is not None else pd.DataFrame()
     except Exception:
-        # 备选接口
-        try:
-            df = safe_request(ak.stock_zh_a_daily, symbol=stock_code, 
-                              start_date=start_date, end_date=end_date, adjust="qfq")
-        except Exception as e:
-            logger.warning(f"[MarketData] Failed to fetch {stock_code}: {e}")
-            return pd.DataFrame()
-    
-    return df if df is not None else pd.DataFrame()
+        pass
+
+    # 备选接口：东方财富
+    try:
+        df = safe_request(ak.stock_zh_a_hist, symbol=stock_code, period="daily",
+                          start_date=start_date, end_date=end_date, adjust="qfq",
+                          verbose_error=False, fail_log_level=logging.WARNING)
+        return df if df is not None else pd.DataFrame()
+    except Exception as e:
+        logger.warning(f"[MarketData] Failed to fetch {stock_code}: {e}")
+        return pd.DataFrame()
 
 
 def _normalize_daily_df(df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
@@ -37,6 +52,7 @@ def _normalize_daily_df(df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
         return df
     
     col_map = {
+        # 东方财富（stock_zh_a_hist）中文列名
         "日期": "trade_date",
         "收盘": "close_price",
         "开盘": "open_price",
@@ -44,6 +60,12 @@ def _normalize_daily_df(df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
         "最低": "low_price",
         "成交量": "volume",
         "成交额": "amount",
+        # 新浪（stock_zh_a_daily）英文列名
+        "date": "trade_date",
+        "close": "close_price",
+        "open": "open_price",
+        "high": "high_price",
+        "low": "low_price",
     }
     
     # 处理 ak.stock_zh_a_hist 返回的列名
@@ -73,37 +95,93 @@ def _normalize_daily_df(df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
     return df[keep_cols]
 
 
-def ingest_daily_prices(stock_codes: list, days_back: int = 30):
+def _get_latest_price_date(stock_code: str) -> str:
+    """查询某只股票在数据库中最新的行情日期，返回 'YYYY-MM-DD' 或 None"""
+    rows = query_sql(
+        "SELECT MAX(trade_date) AS max_date FROM daily_prices WHERE stock_code = ?",
+        (stock_code,),
+    )
+    if rows and rows[0]["max_date"]:
+        return rows[0]["max_date"]
+    return None
+
+
+def _latest_trading_day(ref_date: datetime = None) -> str:
+    """返回 ref_date 当天或之前的最近可能交易日（简单跳过周末）"""
+    d = ref_date or datetime.now()
+    while d.weekday() >= 5:  # 5=Saturday, 6=Sunday
+        d -= timedelta(days=1)
+    return d.strftime("%Y%m%d")
+
+
+def ingest_daily_prices(
+    stock_codes: list,
+    days_back: int = 30,
+    start_date: str = None,
+    end_date: str = None,
+):
     """
-    批量采集个股日度行情
+    批量采集个股日度行情（增量模式）
+
+    - 默认采集最近 days_back 天的行情，自动跳过已有最新数据的股票
+    - 指定 start_date / end_date（格式 YYYYMMDD）时按区间采集，不做跳过
     """
-    end_date = datetime.now().strftime("%Y%m%d")
-    start_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y%m%d")
-    
-    logger.info(f"[MarketData] Fetching daily prices for {len(stock_codes)} stocks...")
-    
+    req_end = end_date or datetime.now().strftime("%Y%m%d")
+    req_start = start_date or (datetime.now() - timedelta(days=days_back)).strftime("%Y%m%d")
+    # 用户显式指定日期范围时不做增量跳过，确保能补采任意历史区间
+    incremental = start_date is None
+    # 增量模式下用最近交易日做跳过判断，避免周末/节假日误触发无效请求
+    effective_end = _latest_trading_day() if incremental else req_end
+
+    logger.info(
+        f"[MarketData] Fetching daily prices for {len(stock_codes)} stocks "
+        f"(range: {req_start} ~ {req_end}, incremental: {incremental})..."
+    )
+
     total = 0
+    skipped = 0
     for i, code in enumerate(stock_codes, 1):
         try:
-            df = fetch_stock_daily(code, start_date, end_date)
+            fetch_start = req_start
+            if incremental:
+                # 增量检查：查数据库中该股票最新行情日期
+                latest = _get_latest_price_date(code)
+                if latest:
+                    latest_compact = latest.replace("-", "")
+                    if latest_compact >= effective_end:
+                        skipped += 1
+                        continue
+                    # 只请求缺失段（从最新日期的下一天开始）
+                    next_day = (
+                        datetime.strptime(latest, "%Y-%m-%d") + timedelta(days=1)
+                    ).strftime("%Y%m%d")
+                    fetch_start = max(next_day, req_start)
+
+            df = fetch_stock_daily(code, fetch_start, effective_end)
             if df.empty:
                 continue
-            
+
             df = _normalize_daily_df(df, code)
             if df.empty:
                 continue
-            
+
             upsert_df(df, "daily_prices", ["stock_code", "trade_date"])
             total += len(df)
-            
+
             if i % 100 == 0:
-                logger.info(f"[MarketData] Progress: {i}/{len(stock_codes)}, records: {total}")
-                
+                logger.info(
+                    f"[MarketData] Progress: {i}/{len(stock_codes)}, "
+                    f"fetched: {total}, skipped: {skipped}"
+                )
+
         except Exception as e:
-            logger.error(f"[MarketData] Error for {code}: {e}")
+            logger.warning(f"[MarketData] Error for {code}: {e}")
             continue
-    
-    logger.info(f"[MarketData] Ingestion completed. Total records: {total}")
+
+    logger.info(
+        f"[MarketData] Ingestion completed. "
+        f"Total records: {total}, skipped stocks: {skipped}"
+    )
     return total
 
 

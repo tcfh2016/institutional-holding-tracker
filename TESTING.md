@@ -6,7 +6,9 @@
 
 ## 测试范围
 
- python -c "import sqlite3; c=sqlite3.connect('data/institutional_holding.db'); print('range:', c.execute('SELECT MIN(survey_date),MAX(survey_date) FROM institutional_research').fetchone()); print('rows:', c.execute('SELECT COUNT(*) FROM institutional_research').fetchone()[0]); print(*c.execute('SELECT stock_code,stock_name,survey_date,institution_name,institution_type FROM institutional_research ORDER BY survey_date DESC LIMIT 5').fetchall(), sep='\\n'); c.close()"
+各阶段入口如下：
+
+```text
 help        检查命令行入口，不访问网络
 init        初始化数据库和股东识别规则
 index       采集沪深300、中证500、创业板指和科创50的成分股
@@ -24,13 +26,13 @@ alert       执行预警规则并写入数据库
 
 ## 测试前准备
 
-python -u main.py --stage research 2>&1 | Tee-Object -FilePath data\logs\research_test.log
 ```powershell
 python --version
 python -m pip install -r requirements.txt
 ```
 
-Test-Path .\main.py
+```powershell
+Test-Path .\\main.py
 ```
 
 项目使用 AkShare 访问公开数据接口。`northbound`、`holders`、`prices` 和 `index` 阶段需要网络连接，运行时间也会受接口响应速度影响。
@@ -38,7 +40,6 @@ Test-Path .\main.py
 注意：`config/settings.py` 中当前 `DEMO_MODE = True`。本地行情不存在时，分析模块可能使用可复现的模拟价格；这适合验证程序链路，不应把结果当作真实投资数据。
 
 ## 推荐测试顺序
-python -c "import sqlite3; c=sqlite3.connect('data/institutional_holding.db'); print('range:', c.execute('SELECT MIN(survey_date),MAX(survey_date) FROM institutional_research').fetchone()); print('rows:', c.execute('SELECT COUNT(*) FROM institutional_research').fetchone()[0]); print(*c.execute('SELECT stock_code,stock_name,survey_date,institution_name,institution_type FROM institutional_research ORDER BY survey_date DESC LIMIT 5').fetchall(), sep='\\n'); c.close()"
 ### 1. 检查 main.py 入口
 
 ```powershell
@@ -56,7 +57,6 @@ python -u main.py --init-only 2>&1 | Tee-Object -FilePath data\logs\init_test.lo
 成功标准：
 
 - 生成 `data\institutional_holding.db`
-research    采集机构调研明细
 - `holder_mappings` 中存在默认股东识别规则
 
 检查数据库文件和核心表：
@@ -64,24 +64,22 @@ research    采集机构调研明细
 ```powershell
 python -c "import sqlite3; c=sqlite3.connect('data/institutional_holding.db'); print('tables:'); print(*c.execute(\"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name\").fetchall(), sep='\n'); print('holder mappings:', c.execute('SELECT COUNT(*) FROM holder_mappings').fetchone()[0]); c.close()"
 ```
-项目使用公开数据接口。`research`、`holders`、`prices` 和 `index` 阶段需要网络连接，运行时间也会受接口响应速度影响。`research` 默认保存全市场数据。
+`research`、`holders`、`prices` 和 `index` 阶段需要网络连接。`research` 默认保存全市场调研数据。
 
 ### 3. 测试 AkShare 接口
-### 8. 采集机构调研和行情
+
 这两个脚本是接口探针，当前主要打印返回结果，还没有自动化断言：
 
 ```powershell
-python -u main.py --stage research 2>&1 | Tee-Object -FilePath data\logs\research_test.log
 python test_api.py 2>&1 | Tee-Object -FilePath data\logs\api_test.log
 python test_price.py 2>&1 | Tee-Object -FilePath data\logs\price_api_test.log
 ```
-检查机构调研：
+
 记录以下信息：
 
 - 接口是否可访问
-python -c "import sqlite3; c=sqlite3.connect('data/institutional_holding.db'); print('range:', c.execute('SELECT MIN(survey_date),MAX(survey_date) FROM institutional_research').fetchone()); print('rows:', c.execute('SELECT COUNT(*) FROM institutional_research').fetchone()[0]); print(*c.execute('SELECT stock_code,stock_name,survey_date,institution_name,institution_type FROM institutional_research ORDER BY survey_date DESC LIMIT 5').fetchall(), sep='\\n'); c.close()"
 - 返回行数
-- 返回列名是否包含代码、日期、收盘价或持股数据
+- 返回列名是否包含代码、日期和行情字段
 - 是否出现超时、限流、参数错误或接口变更
 
 如果这里失败，应先排查网络、AkShare 版本和接口参数，不要直接继续排查分析模块。
@@ -175,13 +173,12 @@ python -c "import sqlite3; c=sqlite3.connect('data/institutional_holding.db'); p
 - 正则匹配，例如包含 `中证金融资产管理计划` 的名称
 - 未匹配名称应返回 `其他`
 
-### 8. 采集机构调研和行情
+### 8. 采集机构调研
 
-可以先分开运行，便于定位问题：
+机构调研是独立的数据采集模块，不是行情采集的前置步骤。需要先完成第 4 步，确保数据库中已有成分股；然后单独运行：
 
 ```powershell
-python -u main.py --stage research 2>&1 | Tee-Object -FilePath data\logs\research_test.log
-python -u main.py --stage prices 2>&1 | Tee-Object -FilePath data\logs\prices_test.log
+python -u main.py --stage research 2>&1 | Tee-Object -FilePath data\\logs\\research_test.log
 ```
 
 检查机构调研：
@@ -210,7 +207,25 @@ python -u main.py --stage research --research-start-date 20260818 --research-end
 
 若历史日期之前只保存过指数成分股，需要使用 `--research-full-market` 强制重新请求这些日期，补齐非成分股记录。唯一键会阻止已有明细重复写入。
 
-### 8. 执行持仓变化分析
+### 9. 采集行情
+
+行情用于持仓变化分析中的市值计算：分析模块按报告期和股票代码查找收盘价，计算持仓市值和市值变动。它不参与机构调研记录的采集，也不决定调研记录是否入库。
+
+行情同样需要先完成第 4 步，且当前只采集前 50 只成分股：
+
+```powershell
+python -u main.py --stage prices 2>&1 | Tee-Object -FilePath data\\logs\\prices_test.log
+```
+
+检查行情：
+
+```powershell
+python -c "import sqlite3; c=sqlite3.connect('data/institutional_holding.db'); print('range:', c.execute('SELECT MIN(trade_date),MAX(trade_date) FROM daily_prices').fetchone()); print('rows:', c.execute('SELECT COUNT(*) FROM daily_prices').fetchone()[0]); print(*c.execute('SELECT stock_code,trade_date,close_price,volume,amount FROM daily_prices ORDER BY trade_date DESC LIMIT 5').fetchall(), sep='\\n'); c.close()"
+```
+
+重点检查日期有效、价格和数量列为数值，以及唯一键是否生效。若本地没有对应日期行情，分析模块会向前查找最近行情，再尝试临时请求；`DEMO_MODE=True` 时最后还会使用可复现的模拟价格，因此“分析能运行”不等于“行情采集成功”。
+
+### 10. 执行持仓变化分析
 
 分析至少需要两个报告期。确认日期后执行：
 
@@ -233,7 +248,7 @@ python -c "import sqlite3; c=sqlite3.connect('data/institutional_holding.db'); p
 
 如果只有一个报告期，出现 `Not enough report dates` 是预期行为，不应当作程序故障。
 
-### 9. 生成报告和运行预警
+### 11. 生成报告和运行预警
 
 ```powershell
 python -u main.py --stage report alert 2>&1 | Tee-Object -FilePath data\logs\report_alert_test.log
@@ -256,7 +271,7 @@ python -c "import sqlite3; c=sqlite3.connect('data/institutional_holding.db'); p
 
 注意：`alerts` 表目前没有唯一约束，重复执行 `alert` 可能写入重复预警。测试时应记录执行次数，或在确认数据库后使用 `clear_tables.py` 清理相关数据。
 
-### 10. 数据统一验收
+### 12. 数据统一验收
 
 ```powershell
 python verify_data.py | Tee-Object -FilePath data\logs\verify_data.log
@@ -264,7 +279,7 @@ python verify_data.py | Tee-Object -FilePath data\logs\verify_data.log
 
 该脚本汇总检查指数、已分类股东、机构类型分布、持仓变化和指数层面汇总，是端到端测试后的最后一个命令行验收入口。
 
-### 11. 启动看板
+### 13. 启动看板
 
 ```powershell
 streamlit run dashboard/app.py
