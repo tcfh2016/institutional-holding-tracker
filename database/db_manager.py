@@ -47,6 +47,14 @@ def init_database():
         conn.executescript(sql)
         conn.execute("DROP TABLE IF EXISTS northbound_holdings")
         conn.execute("DROP TABLE IF EXISTS institutional_research_fetch_log")
+        
+        # 迁移：为 alerts 表添加 report_date 列（兼容旧数据库）
+        cursor = conn.execute("PRAGMA table_info(alerts)")
+        existing_cols = [row[1] for row in cursor.fetchall()]
+        if "report_date" not in existing_cols:
+            conn.execute("ALTER TABLE alerts ADD COLUMN report_date DATE")
+            print("[DB] Migrated: added report_date column to alerts table")
+        
         conn.commit()
         print(f"[DB] Database initialized at {db_path}")
     finally:

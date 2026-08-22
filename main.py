@@ -142,8 +142,10 @@ def run_pipeline(
         logger.info("\n[10/11] 运行预警规则...")
         from analysis.holding_changes import get_report_dates
         dates = get_report_dates()
-        if dates:
-            run_all_alerts(dates[-1])
+        if len(dates) >= 2:
+            run_all_alerts(dates[1:])  # 跳过第一个（没有上期对比，无法生成预警）
+        else:
+            logger.warning("    报告期不足，跳过预警。")
     
     # 10. 数据完整性检查
     if "check" in stages:

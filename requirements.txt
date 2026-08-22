@@ -5,3 +5,4 @@ streamlit>=1.28.0
 plotly>=5.18.0
 requests>=2.31.0
 tushare>=1.4.0
+pypinyin>=0.50.0

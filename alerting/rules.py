@@ -35,6 +35,7 @@ def check_single_stock_alert(report_date: str) -> List[Dict]:
             "stock_code": row["stock_code"],
             "stock_name": row["stock_name"],
             "holder_type": row["holder_type"],
+            "report_date": report_date,
             "message": (f"{row['stock_name']}({row['stock_code']}) 的 {row['holder_type']} "
                        f"本季{row['change_status']}，变动市值占比超过 {threshold*100:.0f}%"),
         })
@@ -63,6 +64,7 @@ def check_national_team_new_exit(report_date: str) -> List[Dict]:
             "stock_code": row["stock_code"],
             "stock_name": row["stock_name"],
             "holder_type": row["holder_type"],
+            "report_date": report_date,
             "message": (f"【{level}】{row['stock_name']}({row['stock_code']}) "
                        f"被 {row['holder_type']} {row['change_status']}"),
         })
@@ -92,6 +94,7 @@ def check_index_level_change(report_date: str) -> List[Dict]:
             "stock_code": None,
             "stock_name": row["index_name"],
             "holder_type": row["holder_type"],
+            "report_date": report_date,
             "message": (f"{row['index_name']} 的 {row['holder_type']} 合计{direction} {amount_b:.1f} 亿元"),
         })
     return alerts
@@ -130,6 +133,7 @@ def check_consecutive_changes(report_date: str, n_quarters: int = 2) -> List[Dic
                 "stock_code": scode,
                 "stock_name": recent.iloc[0]["stock_name"],
                 "holder_type": htype,
+                "report_date": recent.iloc[0]["report_date"],
                 "message": (f"{recent.iloc[0]['stock_name']}({scode}) 被 {htype} "
                            f"连续 {n_quarters} 个季度增持"),
             })
@@ -140,6 +144,7 @@ def check_consecutive_changes(report_date: str, n_quarters: int = 2) -> List[Dic
                 "stock_code": scode,
                 "stock_name": recent.iloc[0]["stock_name"],
                 "holder_type": htype,
+                "report_date": recent.iloc[0]["report_date"],
                 "message": (f"{recent.iloc[0]['stock_name']}({scode}) 被 {htype} "
                            f"连续 {n_quarters} 个季度减持"),
             })
@@ -151,55 +156,86 @@ def repair_null_stock_names() -> int:
     """
     修复 alerts 表中 stock_name 为 NULL 的记录，
     从 holding_changes_summary 中补充正确的股票名称。
+    同时修复 report_date 为 NULL 的记录。
     """
     sql = """
         UPDATE alerts
-        SET stock_name = (
-            SELECT hcs.stock_name
-            FROM holding_changes_summary hcs
-            WHERE hcs.stock_code = alerts.stock_code
-              AND hcs.holder_type = alerts.holder_type
-              AND hcs.stock_name IS NOT NULL
-            LIMIT 1
-        )
-        WHERE alerts.stock_name IS NULL
-          AND alerts.stock_code IS NOT NULL
+        SET stock_name = COALESCE(stock_name, (
+                SELECT hcs.stock_name
+                FROM holding_changes_summary hcs
+                WHERE hcs.stock_code = alerts.stock_code
+                  AND hcs.holder_type = alerts.holder_type
+                  AND hcs.stock_name IS NOT NULL
+                LIMIT 1
+            )),
+            report_date = COALESCE(report_date, (
+                SELECT hcs.report_date
+                FROM holding_changes_summary hcs
+                WHERE hcs.stock_code = alerts.stock_code
+                  AND hcs.holder_type = alerts.holder_type
+                LIMIT 1
+            ))
+        WHERE alerts.stock_code IS NOT NULL
+          AND (alerts.stock_name IS NULL OR alerts.report_date IS NULL)
     """
     count = execute_sql(sql)
     if count > 0:
-        logger.info(f"[Alert] Repaired {count} alerts with NULL stock_name.")
+        logger.info(f"[Alert] Repaired {count} alerts with NULL stock_name or report_date.")
     return count
 
 
-def run_all_alerts(report_date: str) -> List[Dict]:
+def repair_alert_times() -> int:
     """
-    运行所有预警规则，返回预警列表并写入数据库。
-    已有相同内容的预警不会重复写入。
+    修复已有预警记录的 alert_time：
+    使用 alerts 表自身的 report_date 列更新 alert_time。
+    仅修复 alert_time 不是日期格式（即旧版 CURRENT_TIMESTAMP）的记录。
     """
-    logger.info(f"[Alert] Running all alert checks for {report_date}...")
+    sql = """
+        UPDATE alerts
+        SET alert_time = report_date
+        WHERE report_date IS NOT NULL
+          AND alert_time NOT LIKE '____-__-__'
+    """
+    count = execute_sql(sql)
+    if count > 0:
+        logger.info(f"[Alert] Repaired {count} alerts' alert_time from report_date.")
+    return count
 
-    # 先修复历史 NULL stock_name
+
+def run_all_alerts(report_dates: list) -> List[Dict]:
+    """
+    对所有报告期运行预警规则，返回预警列表并写入数据库。
+    已有相同内容（同一报告期）的预警不会重复写入。
+    report_dates: 报告期列表，如 ['2025-03-31', '2025-06-30', '2025-09-30']
+    """
+    # 先修复历史 NULL stock_name / report_date
     repair_null_stock_names()
+    # 修复历史 alert_time 为公告日期
+    repair_alert_times()
 
     all_alerts = []
-    all_alerts.extend(check_single_stock_alert(report_date))
-    all_alerts.extend(check_national_team_new_exit(report_date))
-    all_alerts.extend(check_index_level_change(report_date))
-    all_alerts.extend(check_consecutive_changes(report_date))
+    for rd in report_dates:
+        logger.info(f"[Alert] Running alert checks for {rd}...")
+        all_alerts.extend(check_single_stock_alert(rd))
+        all_alerts.extend(check_national_team_new_exit(rd))
+        all_alerts.extend(check_index_level_change(rd))
+        all_alerts.extend(check_consecutive_changes(rd))
 
-    # 写入数据库：跳过已存在的相同预警
+    # 写入数据库：跳过已存在的相同预警（按 report_date + message 去重）
     inserted = 0
     skipped = 0
     for alert in all_alerts:
-        # 用 (alert_type, stock_code, holder_type, message) 作为去重键
+        # 用 (report_date, alert_type, stock_code, holder_type, message) 作为去重键
         check_sql = """
             SELECT COUNT(*) as cnt FROM alerts
-            WHERE alert_type = ?
+            WHERE report_date = ?
+              AND alert_type = ?
               AND (stock_code = ? OR (stock_code IS NULL AND ? IS NULL))
               AND (holder_type = ? OR (holder_type IS NULL AND ? IS NULL))
               AND message = ?
         """
         params = (
+            alert.get("report_date"),
             alert["alert_type"],
             alert.get("stock_code"), alert.get("stock_code"),
             alert.get("holder_type"), alert.get("holder_type"),
@@ -211,10 +247,12 @@ def run_all_alerts(report_date: str) -> List[Dict]:
             continue
 
         sql = """
-            INSERT INTO alerts (alert_type, alert_level, stock_code, stock_name, holder_type, message)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO alerts (alert_time, report_date, alert_type, alert_level, stock_code, stock_name, holder_type, message)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """
         execute_sql(sql, (
+            alert.get("report_date"),
+            alert.get("report_date"),
             alert["alert_type"], alert["alert_level"],
             alert.get("stock_code"), alert.get("stock_name"),
             alert.get("holder_type"), alert["message"]

@@ -154,6 +154,7 @@ CREATE TABLE IF NOT EXISTS index_holding_summary (
 CREATE TABLE IF NOT EXISTS alerts (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     alert_time      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    report_date     DATE,               -- 公告日期（报告期）
     alert_type      TEXT NOT NULL,          -- 预警类型
     alert_level     TEXT NOT NULL,          -- 普通/重要/紧急
     stock_code      TEXT,

@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+from pypinyin import lazy_pinyin
 
 from database.db_manager import query_df, init_database
 from reporting.quarterly_report import generate_quarterly_report
@@ -106,7 +107,81 @@ with tab1:
 with tab2:
     st.subheader("🔎 个股机构持仓查询")
     
-    stock_code = st.text_input("输入股票代码", placeholder="例如: 600519")
+    # ---- 股票搜索补全组件 ----
+    # 获取所有股票列表（代码 + 名称）
+    @st.cache_data(ttl=300)
+    def get_all_stocks():
+        """从数据库获取所有股票代码和名称"""
+        sql = """
+            SELECT DISTINCT stock_code, stock_name
+            FROM holding_changes_summary
+            WHERE stock_name IS NOT NULL AND stock_name != ''
+            ORDER BY stock_code
+        """
+        return query_df(sql)
+    
+    def to_pinyin(text):
+        """将中文转换为拼音字符串（无空格）"""
+        return ''.join(lazy_pinyin(text))
+    
+    def filter_stocks(query, stocks_df):
+        """根据输入过滤股票：支持代码、名称、拼音搜索"""
+        if not query:
+            return stocks_df
+        query_lower = query.lower().strip()
+        results = []
+        for _, row in stocks_df.iterrows():
+            code = str(row['stock_code'])
+            name = str(row['stock_name']) if pd.notna(row['stock_name']) else ''
+            # 代码匹配
+            if query_lower in code.lower():
+                results.append(row)
+                continue
+            # 名称匹配
+            if query_lower in name.lower():
+                results.append(row)
+                continue
+            # 拼音匹配
+            pinyin_str = to_pinyin(name).lower()
+            if query_lower in pinyin_str:
+                results.append(row)
+                continue
+        return pd.DataFrame(results) if results else pd.DataFrame()
+    
+    all_stocks_df = get_all_stocks()
+    
+    stock_search = st.text_input(
+        "搜索股票（支持代码 / 名称 / 拼音）",
+        placeholder="例如: 600519 或 茅台 或 mt",
+        key="stock_search_input"
+    )
+    
+    stock_code = None
+    stock_name_display = None
+    
+    if stock_search:
+        matched = filter_stocks(stock_search, all_stocks_df)
+        if not matched.empty:
+            # 构建显示选项：代码 + 名称
+            matched = matched.copy()
+            matched['display'] = matched['stock_code'] + ' - ' + matched['stock_name']
+            options = matched['display'].tolist()
+            
+            selected_display = st.selectbox(
+                "请选择股票",
+                options,
+                index=0 if len(options) == 1 else None,
+                label_visibility="collapsed",
+                key="stock_selectbox"
+            )
+            
+            if selected_display:
+                # 从选项中提取代码和名称
+                parts = selected_display.split(' - ', 1)
+                stock_code = parts[0]
+                stock_name_display = parts[1]
+        else:
+            st.info(f"未找到匹配 '{stock_search}' 的股票")
     
     if stock_code:
         sql = """
@@ -121,15 +196,19 @@ with tab2:
         df_stock = query_df(sql, params)
         
         if not df_stock.empty:
+            # 显示股票标题（代码 + 名称）
+            title_text = f"{stock_code} {stock_name_display} 机构持仓市值变化趋势" if stock_name_display else f"{stock_code} 机构持仓市值变化趋势"
+            
             df_stock["mv_亿"] = df_stock["total_market_value"] / 1e8
             fig = px.line(df_stock, x="report_date", y="mv_亿", color="holder_type",
-                         title=f"{stock_code} 机构持仓市值变化趋势",
+                         title=title_text,
                          markers=True)
             st.plotly_chart(fig, width='stretch')
             
             st.dataframe(df_stock, width='stretch')
         else:
-            st.info(f"未找到 {stock_code} 的机构持仓数据。")
+            name_part = f" {stock_name_display}" if stock_name_display else ""
+            st.info(f"未找到 {stock_code}{name_part} 的机构持仓数据。")
 
 # ---------- Tab 3: 国家队 ----------
 with tab3:
@@ -257,29 +336,52 @@ with tab4:
 with tab5:
     st.subheader("⚠️ 预警清单")
     
+    # 获取预警表中的报告期
+    alert_dates_df = query_df("SELECT DISTINCT report_date FROM alerts WHERE report_date IS NOT NULL ORDER BY report_date DESC")
+    alert_dates = alert_dates_df["report_date"].tolist() if not alert_dates_df.empty else []
+    
     # 等级筛选
     level_options = ["全部", "紧急", "重要", "普通"]
     selected_level = st.selectbox("预警等级", level_options, index=0)
     
-    if selected_level == "全部":
-        sql = """
-            SELECT alert_time, alert_level, alert_type, stock_code, stock_name, holder_type, message
-            FROM alerts
-            ORDER BY 
-                CASE alert_level WHEN '紧急' THEN 1 WHEN '重要' THEN 2 WHEN '普通' THEN 3 END,
-                alert_time DESC
-        """
-        df_alert = query_df(sql)
-    else:
-        sql = """
-            SELECT alert_time, alert_level, alert_type, stock_code, stock_name, holder_type, message
-            FROM alerts
-            WHERE alert_level = ?
-            ORDER BY alert_time DESC
-        """
-        df_alert = query_df(sql, (selected_level,))
+    # 报告期筛选
+    selected_alert_date = st.selectbox("公告日期", ["全部"] + alert_dates, index=0)
+    
+    # 构建查询条件
+    conditions = []
+    params = []
+    if selected_level != "全部":
+        conditions.append("alert_level = ?")
+        params.append(selected_level)
+    if selected_alert_date != "全部":
+        conditions.append("report_date = ?")
+        params.append(selected_alert_date)
+    
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+    
+    sql = f"""
+        SELECT alert_time, report_date, alert_level, alert_type, stock_code, stock_name, holder_type, message
+        FROM alerts
+        {where_clause}
+        ORDER BY 
+            CASE alert_level WHEN '紧急' THEN 1 WHEN '重要' THEN 2 WHEN '普通' THEN 3 END,
+            report_date DESC
+    """
+    df_alert = query_df(sql, tuple(params))
     
     if not df_alert.empty:
+        # 重命名显示列名
+        display_df = df_alert.rename(columns={
+            "alert_time": "记录时间",
+            "report_date": "公告日期",
+            "alert_level": "预警等级",
+            "alert_type": "预警类型",
+            "stock_code": "股票代码",
+            "stock_name": "股票名称",
+            "holder_type": "机构类型",
+            "message": "预警内容",
+        })
+        
         def highlight_level(val):
             if val == "紧急":
                 return "background-color: #ffcccc"
@@ -287,7 +389,7 @@ with tab5:
                 return "background-color: #ffe6cc"
             return ""
         
-        styled = df_alert.style.map(highlight_level, subset=["alert_level"])
+        styled = display_df.style.map(highlight_level, subset=["预警等级"])
         st.dataframe(styled, width='stretch')
     else:
         st.info("暂无预警记录。")
