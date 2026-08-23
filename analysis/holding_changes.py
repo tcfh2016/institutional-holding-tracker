@@ -6,7 +6,7 @@ from typing import List, Dict, Optional
 import pandas as pd
 import numpy as np
 
-from database.db_manager import query_sql, query_df, execute_sql, upsert_df
+from database.db_manager import query_sql, query_df, execute_sql, upsert_df, normalize_report_date
 from config.settings import TRACKED_INDICES
 
 logger = logging.getLogger(__name__)
@@ -70,11 +70,45 @@ def get_close_price(stock_code: str, date: str) -> float:
     return np.nan
 
 
+def _load_close_price_map(stock_codes: List[str], report_date: str) -> Dict[str, float]:
+    """
+    批量预加载收盘价映射：一次查询 daily_prices 中 trade_date <= report_date 的最新收盘价，
+    返回 {stock_code: close_price}。规避逐行调用 get_close_price 造成的海量数据库连接。
+    """
+    price_map: Dict[str, float] = {}
+    codes = [c for c in stock_codes if c]
+    if not codes:
+        return price_map
+
+    BATCH_SIZE = 500  # SQLite 变量数上限约 999，留余量
+    for i in range(0, len(codes), BATCH_SIZE):
+        batch = codes[i : i + BATCH_SIZE]
+        placeholders = ",".join(["?"] * len(batch))
+        sql = f"""
+            SELECT d.stock_code, d.close_price
+            FROM daily_prices d
+            JOIN (
+                SELECT stock_code, MAX(trade_date) AS max_date
+                FROM daily_prices
+                WHERE stock_code IN ({placeholders}) AND trade_date <= ?
+                GROUP BY stock_code
+            ) m ON d.stock_code = m.stock_code AND d.trade_date = m.max_date
+        """
+        rows = query_sql(sql, tuple(batch) + (report_date,))
+        for r in rows:
+            if r["close_price"] is not None:
+                price_map[r["stock_code"]] = float(r["close_price"])
+    return price_map
+
+
 def compute_holding_changes(report_date: str, prev_report_date: str):
     """
     计算单期持仓变化（新进/退出/增持/减持）
     结果写入 holding_changes_summary 表
+    入参兼容 YYYYMMDD / YYYY-MM-DD，内部统一为 YYYY-MM-DD（数据库格式）
     """
+    report_date = normalize_report_date(report_date)
+    prev_report_date = normalize_report_date(prev_report_date)
     logger.info(f"[Analysis] Computing changes: {prev_report_date} -> {report_date}")
     
     sql = """
@@ -103,6 +137,36 @@ def compute_holding_changes(report_date: str, prev_report_date: str):
     }).reset_index() if not prev_df.empty else pd.DataFrame(
         columns=["stock_code", "holder_type", "hold_shares"]
     )
+    
+    # 排除"数据缺失"股票：当期状态表标记 no_data/error 且 top_holders 完全无记录，
+    # 说明该股票当期无有效数据（未披露/未采集到），不应把上期持有机构误判为"退出"
+    try:
+        status_rows = query_sql(
+            """
+            SELECT DISTINCT stock_code
+            FROM top_holder_fetch_status
+            WHERE report_date = ? AND status IN ('no_data', 'error')
+            """,
+            (report_date,),
+        )
+        no_data_codes = {r["stock_code"] for r in status_rows}
+    except Exception:
+        # 状态表不存在（旧库未初始化）：降级为不过滤，保持原行为
+        no_data_codes = set()
+
+    if no_data_codes:
+        has_data_rows = query_sql(
+            "SELECT DISTINCT stock_code FROM top_holders WHERE report_date = ?",
+            (report_date,),
+        )
+        has_data_codes = {r["stock_code"] for r in has_data_rows}
+        missing_codes = no_data_codes - has_data_codes
+        if missing_codes:
+            logger.info(
+                f"[Analysis] Excluding {len(missing_codes)} stocks with no data "
+                f"in {report_date}: {sorted(missing_codes)[:20]}"
+            )
+            prev_agg = prev_agg[~prev_agg["stock_code"].isin(missing_codes)]
     
     # 合并本期和上期
     merged = curr_agg.merge(
@@ -140,16 +204,23 @@ def compute_holding_changes(report_date: str, prev_report_date: str):
     # 计算变化
     merged["change_shares"] = merged["hold_shares"] - merged["prev_hold_shares"]
     
-    # 持股市值（退出记录用上一期持股数，反映退出前的实际持仓规模）
-    merged["effective_shares"] = merged.apply(
-        lambda row: row["hold_shares"] if row["hold_shares"] > 0 else row["prev_hold_shares"], axis=1
+    # 持股市值：一律用当期实际持股数计算（退出记录当期已清仓，市值自然为 0），
+    # 保证 total_hold_shares / total_market_value 均为"报告期期末"口径，语义一致
+    # 预加载收盘价映射并向量化计算市值（缺失价格的股票 fallback 到 get_close_price，保持原行为）
+    stock_codes = merged["stock_code"].unique().tolist()
+    price_map = _load_close_price_map(stock_codes, report_date)
+    missing_codes = [c for c in stock_codes if c not in price_map]
+    for c in missing_codes:
+        price_map[c] = get_close_price(c, report_date)
+    logger.info(
+        f"[Analysis] Price map loaded: {len(price_map)} stocks "
+        f"({len(missing_codes)} fallback) for {report_date}"
     )
-    merged["total_hold_market_value"] = merged.apply(
-        lambda row: row["effective_shares"] * get_close_price(row["stock_code"], report_date), axis=1
-    )
-    merged["change_market_value"] = merged.apply(
-        lambda row: row["change_shares"] * get_close_price(row["stock_code"], report_date), axis=1
-    )
+
+    merged["close_price"] = merged["stock_code"].map(price_map)
+    merged["total_hold_market_value"] = merged["hold_shares"] * merged["close_price"]
+    merged["change_market_value"] = merged["change_shares"] * merged["close_price"]
+    merged = merged.drop(columns=["close_price"])
     
     # 变化状态
     def get_change_status(row):
@@ -216,7 +287,9 @@ def compute_all_holding_changes():
 def compute_index_holding_summary(report_date: str):
     """
     按指数汇总某报告期的机构持仓
+    入参兼容 YYYYMMDD / YYYY-MM-DD，内部统一为 YYYY-MM-DD（数据库格式）
     """
+    report_date = normalize_report_date(report_date)
     logger.info(f"[Analysis] Computing index summary for {report_date}...")
     
     # 获取该日期各指数成分股的机构持仓汇总

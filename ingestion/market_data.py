@@ -247,21 +247,33 @@ def get_stock_name(stock_code: str):
     return rows[0]["stock_name"] if rows else None
 
 
-def sync_stocks_from_index_components():
-    """使用已采集的指数成分股信息初始化股票主数据。"""
-    rows = query_sql(
-        """
+def sync_stocks_from_index_components(include_institutional: bool = False):
+    """使用已采集的指数成分股信息初始化股票主数据。
+
+    include_institutional=True 时同时同步机构持仓股票（跟踪池扩展）。
+    """
+    sql = """
         SELECT stock_code, stock_name
         FROM index_components
         WHERE stock_code IS NOT NULL
           AND stock_name IS NOT NULL
           AND stock_name != ''
         GROUP BY stock_code
-        ORDER BY stock_code
+    """
+    if include_institutional:
+        sql += """
+        UNION
+        SELECT stock_code, stock_name
+        FROM institutional_holdings
+        WHERE holder_types IS NOT NULL
+          AND stock_name IS NOT NULL
+          AND stock_name != ''
         """
-    )
+    sql += " ORDER BY stock_code"
+
+    rows = query_sql(sql)
     if not rows:
-        logger.warning("[StockInfo] No named index components available.")
+        logger.warning("[StockInfo] No named tracked stocks available.")
         return 0
 
     with get_connection() as conn:
@@ -274,5 +286,8 @@ def sync_stocks_from_index_components():
             """,
             [(row["stock_code"], row["stock_name"]) for row in rows],
         )
-    logger.info(f"[StockInfo] Synced {len(rows)} stocks from index components.")
+    logger.info(
+        f"[StockInfo] Synced {len(rows)} stocks "
+        f"({'index + institutional' if include_institutional else 'index components'})."
+    )
     return len(rows)

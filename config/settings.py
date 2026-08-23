@@ -40,8 +40,11 @@ UPDATE_SCHEDULE = {
 
 # 请求重试配置
 REQUEST_RETRIES = 3
-REQUEST_TIMEOUT = 30
+REQUEST_TIMEOUT = 120  # socket 级超时（秒）：csindex 等慢接口合理上限，避免请求挂起数分钟
 REQUEST_DELAY = 0.5  # 请求间隔秒数
+
+# 采集状态缓存：无数据（no_data/error）股票距上次采集不足该天数则跳过请求，避免反复请求空接口
+NO_DATA_RECHECK_DAYS = 7
 
 # 演示模式：当网络环境不稳定无法获取实时行情时，使用模拟价格展示看板效果
 # 生产环境请设为 False

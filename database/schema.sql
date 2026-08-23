@@ -164,6 +164,27 @@ CREATE TABLE IF NOT EXISTS alerts (
     is_read         INTEGER DEFAULT 0
 );
 
+-- 机构持仓股票（全市场扫描结果：指数成分之外的机构持仓股票，纳入跟踪池）
+CREATE TABLE IF NOT EXISTS institutional_holdings (
+    stock_code      TEXT PRIMARY KEY,
+    stock_name      TEXT,
+    holder_types    TEXT,               -- 识别到的机构类型，逗号分隔（如 "证金公司,社保基金"）
+    report_date     DATE,               -- 扫描到的报告期
+    last_scan_date  DATE,               -- 最近扫描日期，断点续扫依据
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 股东数据采集状态（区分"真实清仓"与"数据缺失"，供分析引擎排除误判退出）
+CREATE TABLE IF NOT EXISTS top_holder_fetch_status (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    stock_code      TEXT NOT NULL,
+    report_date     DATE NOT NULL,
+    is_float_holder INTEGER NOT NULL,   -- 0=十大股东, 1=十大流通股东
+    status          TEXT NOT NULL,      -- ok / no_data / error
+    fetched_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(stock_code, report_date, is_float_holder)
+);
+
 -- 创建常用索引
 CREATE INDEX IF NOT EXISTS idx_th_stock ON top_holders(stock_code, report_date);
 CREATE INDEX IF NOT EXISTS idx_th_type ON top_holders(holder_type, report_date);
@@ -171,3 +192,4 @@ CREATE INDEX IF NOT EXISTS idx_dp_date ON daily_prices(stock_code, trade_date);
 CREATE INDEX IF NOT EXISTS idx_research_date ON institutional_research(stock_code, survey_date);
 CREATE INDEX IF NOT EXISTS idx_fh_date ON fund_holdings(report_date, stock_code);
 CREATE INDEX IF NOT EXISTS idx_hcs ON holding_changes_summary(report_date, holder_type);
+CREATE INDEX IF NOT EXISTS idx_thfs_date ON top_holder_fetch_status(report_date, status);

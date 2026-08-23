@@ -7,8 +7,11 @@ import pandas as pd
 import akshare as ak
 
 from ingestion.base import retry_on_error, safe_request
-from database.db_manager import upsert_df, query_sql
+from database.db_manager import upsert_df, query_sql, execute_sql
 from config.settings import TRACKED_INDICES
+
+# 指数成分股每月调整一次，30 天内采集过即视为新鲜，跳过网络请求
+FRESHNESS_DAYS = 30
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +80,22 @@ def ingest_index_components():
     
     for name, info in TRACKED_INDICES.items():
         code = info["code"]
+
+        # 新鲜度检查：成分股每月调整一次，数据 30 天内新鲜则跳过网络请求
+        rows = query_sql(
+            "SELECT MAX(effective_date) AS max_date FROM index_components WHERE index_code=?",
+            (code,)
+        )
+        last_date = rows[0]["max_date"] if rows and rows[0]["max_date"] else None
+        if last_date:
+            age_days = (pd.Timestamp.now().date() - pd.to_datetime(last_date).date()).days
+            if age_days <= FRESHNESS_DAYS:
+                logger.info(
+                    f"[IndexComponents] {name} ({code}): data fresh "
+                    f"(last {last_date}, {age_days}d ago), skip network fetch."
+                )
+                continue
+
         logger.info(f"[IndexComponents] Fetching {name} ({code})...")
 
         try:
@@ -112,11 +131,12 @@ def ingest_index_components():
             if col not in df.columns:
                 df[col] = None
         
-        # 写入数据库
+        # 写入数据库（先删除该指数旧版本，保持单快照，避免每天堆积重复记录）
         try:
+            execute_sql("DELETE FROM index_components WHERE index_code=?", (code,))
             upsert_df(df[["index_code", "stock_code", "stock_name", "weight", "effective_date"]],
                       "index_components", ["index_code", "stock_code", "effective_date"])
-            logger.info(f"[IndexComponents] {name}: {len(df)} components saved.")
+            logger.info(f"[IndexComponents] {name}: {len(df)} components saved (single snapshot).")
         except Exception as e:
             logger.error(f"[IndexComponents] DB error for {name}: {e}")
     

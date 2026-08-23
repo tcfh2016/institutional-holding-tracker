@@ -2,6 +2,7 @@
 数据采集基类：提供通用重试、日志、延迟功能
 """
 import time
+import socket
 import logging
 from functools import wraps
 from typing import Callable, Any
@@ -49,6 +50,10 @@ def safe_request(func: Callable, *args, verbose_error: bool = True,
     """
     start = time.perf_counter()
     logging.info(f"[Request] {func.__name__} started")
+
+    # socket 级超时保护：akshare 内部 requests 挂起时快速抛异常进入重试，不再等待数分钟
+    prev_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(REQUEST_TIMEOUT)
     try:
         result = func(*args, **kwargs)
         elapsed = time.perf_counter() - start
@@ -65,3 +70,5 @@ def safe_request(func: Callable, *args, verbose_error: bool = True,
         if verbose_error:
             logging.debug(f"[Request] {func.__name__} traceback:", exc_info=True)
         raise
+    finally:
+        socket.setdefaulttimeout(prev_timeout)

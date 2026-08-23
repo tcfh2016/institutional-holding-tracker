@@ -9,7 +9,13 @@ import logging
 from typing import Optional, List, Dict, Tuple
 import pandas as pd
 
-from database.db_manager import query_sql, execute_sql, upsert_df
+from database.db_manager import (
+    query_sql,
+    execute_sql,
+    execute_many,
+    upsert_df,
+    normalize_report_date,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -193,40 +199,47 @@ def classify_holders_batch(df: pd.DataFrame, holder_col: str = "holder_name",
     return df
 
 
-def update_top_holders_type():
+def update_top_holders_type(report_date: Optional[str] = None):
     """
-    对 top_holders 表中尚未分类的记录进行批量分类
+    对 top_holders 表中尚未分类的记录进行批量分类。
+    - pandas 内存批量分类 + execute_many 分批 UPDATE（DB 往返从 N 次降到 N/1000 次）
+    - report_date: 可选，按报告期分片处理（兼容 YYYYMMDD / YYYY-MM-DD），支持断点续跑
     """
     logger.info("[HolderClassifier] Updating holder types in top_holders...")
     
-    # 查询尚未分类的记录
+    # 查询尚未分类的记录（可选按报告期分片）
     sql = """
         SELECT id, holder_name FROM top_holders
         WHERE holder_type IS NULL OR holder_type = '' OR holder_type = '其他'
     """
-    rows = query_sql(sql)
+    sql_params: tuple = ()
+    if report_date is not None:
+        sql += " AND report_date = ?"
+        sql_params = (normalize_report_date(report_date),)
+    rows = query_sql(sql, sql_params)
     
+    scope = f" for {report_date}" if report_date else ""
     if not rows:
-        logger.info("[HolderClassifier] No unclassified holders found.")
+        logger.info(f"[HolderClassifier] No unclassified holders found{scope}.")
         return 0
     
-    logger.info(f"[HolderClassifier] Found {len(rows)} unclassified holders.")
+    logger.info(f"[HolderClassifier] Found {len(rows)} unclassified holders{scope}.")
     
     rules = load_rules_from_db()
     if not rules:
         rules = [{"keyword": k, "holder_type": t, "priority": p, "match_type": m}
                  for k, t, p, m in DEFAULT_RULES]
     
-    updated = 0
-    for row in rows:
-        holder_type = classify_holder(row["holder_name"], rules)
-        execute_sql(
-            "UPDATE top_holders SET holder_type = ? WHERE id = ?",
-            (holder_type, row["id"])
-        )
-        updated += 1
-        if updated % 500 == 0:
-            logger.info(f"[HolderClassifier] Progress: {updated}/{len(rows)}")
+    # 内存批量分类
+    df = pd.DataFrame(rows)
+    df["holder_type"] = df["holder_name"].apply(lambda x: classify_holder(x, rules))
+    
+    # 分批 UPDATE：DB 往返从 len(rows) 次降到 ~len(rows)/1000 次
+    params_list = list(zip(df["holder_type"].tolist(), df["id"].tolist()))
+    updated = execute_many(
+        "UPDATE top_holders SET holder_type = ? WHERE id = ?",
+        params_list,
+    )
     
     logger.info(f"[HolderClassifier] Updated {updated} records.")
     return updated

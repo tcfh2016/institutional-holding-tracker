@@ -10,11 +10,16 @@ logger = logging.getLogger(__name__)
 
 
 def check_unclassified_holders() -> Dict:
-    """检查 top_holders 中未分类的记录"""
+    """检查 top_holders 中未分类的记录。
+
+    "未分类"仅指 holder_type 为 NULL 或空字符串；
+    "其他"是分类器 classify_holder() 的合法兜底结果（普通股东），不算未分类。
+    """
     sql = """
         SELECT 
             COUNT(*) as total,
-            SUM(CASE WHEN holder_type IS NULL OR holder_type = '' OR holder_type = '其他' THEN 1 ELSE 0 END) as unclassified
+            SUM(CASE WHEN holder_type IS NULL OR holder_type = '' THEN 1 ELSE 0 END) as unclassified,
+            SUM(CASE WHEN holder_type = '其他' THEN 1 ELSE 0 END) as others
         FROM top_holders
     """
     rows = query_sql(sql)
@@ -23,12 +28,13 @@ def check_unclassified_holders() -> Dict:
     
     total = rows[0]["total"]
     unclassified = rows[0]["unclassified"] or 0
+    others = rows[0]["others"] or 0
     
     return {
         "total": total,
         "unclassified": unclassified,
         "ok": unclassified == 0,
-        "message": f"top_holders: {total} 条记录, {unclassified} 条未分类" if unclassified > 0 else None
+        "message": f"top_holders: {total} 条记录, {unclassified} 条未分类(NULL/空), {others} 条为'其他'(普通股东)" if unclassified > 0 else None
     }
 
 

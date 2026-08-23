@@ -6,7 +6,7 @@ from typing import List, Dict
 import pandas as pd
 import numpy as np
 
-from database.db_manager import query_df, execute_sql
+from database.db_manager import query_df, execute_sql, normalize_report_date
 from config.settings import ALERT_THRESHOLDS
 
 logger = logging.getLogger(__name__)
@@ -205,59 +205,81 @@ def repair_alert_times() -> int:
 def run_all_alerts(report_dates: list) -> List[Dict]:
     """
     对所有报告期运行预警规则，返回预警列表并写入数据库。
-    已有相同内容（同一报告期）的预警不会重复写入。
-    report_dates: 报告期列表，如 ['2025-03-31', '2025-06-30', '2025-09-30']
+    优化：只处理 alerts 表中缺失的报告期；内存集合去重替代逐条 SELECT；executemany 批量插入。
+    report_dates: 报告期列表，兼容 YYYYMMDD / YYYY-MM-DD，内部统一为 YYYY-MM-DD
     """
+    # 入参归一化（兼容 YYYYMMDD / YYYY-MM-DD），避免格式混用导致 alerts 期数误判
+    report_dates = [normalize_report_date(rd) for rd in report_dates]
+
     # 先修复历史 NULL stock_name / report_date
     repair_null_stock_names()
     # 修复历史 alert_time 为公告日期
     repair_alert_times()
 
+    if not report_dates:
+        logger.warning("[Alert] No report dates to process.")
+        return []
+
+    # 只处理缺失报告期：alerts 表已有预警的报告期直接跳过
+    existing_dates = set(
+        str(r["report_date"]) for r in query_df(
+            "SELECT DISTINCT report_date FROM alerts WHERE report_date IS NOT NULL"
+        ).to_dict("records")
+    )
+    missing_dates = [str(rd) for rd in report_dates if str(rd) not in existing_dates]
+    if len(missing_dates) < len(report_dates):
+        logger.info(f"[Alert] Skip report dates with existing alerts: {sorted(set(str(d) for d in report_dates) - set(missing_dates))}")
+    if not missing_dates:
+        logger.info("[Alert] All report dates already have alerts, nothing to generate.")
+        return []
+
     all_alerts = []
-    for rd in report_dates:
+    for rd in missing_dates:
         logger.info(f"[Alert] Running alert checks for {rd}...")
         all_alerts.extend(check_single_stock_alert(rd))
         all_alerts.extend(check_national_team_new_exit(rd))
         all_alerts.extend(check_index_level_change(rd))
         all_alerts.extend(check_consecutive_changes(rd))
 
-    # 写入数据库：跳过已存在的相同预警（按 report_date + message 去重）
+    # 一次性加载已有去重键到内存 set（None 直接参与元组比较）
+    existing_keys = set()
+    for row in query_df(
+        "SELECT report_date, alert_type, stock_code, holder_type, message FROM alerts"
+    ).to_dict("records"):
+        existing_keys.add((
+            row["report_date"], row["alert_type"],
+            row["stock_code"], row["holder_type"], row["message"],
+        ))
+
+    # 批量插入新预警（单连接 + executemany）
+    from database.db_manager import get_connection
+    insert_sql = """
+        INSERT INTO alerts (alert_time, report_date, alert_type, alert_level, stock_code, stock_name, holder_type, message)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """
     inserted = 0
     skipped = 0
+    rows = []
     for alert in all_alerts:
-        # 用 (report_date, alert_type, stock_code, holder_type, message) 作为去重键
-        check_sql = """
-            SELECT COUNT(*) as cnt FROM alerts
-            WHERE report_date = ?
-              AND alert_type = ?
-              AND (stock_code = ? OR (stock_code IS NULL AND ? IS NULL))
-              AND (holder_type = ? OR (holder_type IS NULL AND ? IS NULL))
-              AND message = ?
-        """
-        params = (
-            alert.get("report_date"),
-            alert["alert_type"],
-            alert.get("stock_code"), alert.get("stock_code"),
-            alert.get("holder_type"), alert.get("holder_type"),
-            alert["message"],
+        key = (
+            alert.get("report_date"), alert["alert_type"],
+            alert.get("stock_code"), alert.get("holder_type"), alert["message"],
         )
-        result = query_df(check_sql, params)
-        if result.iloc[0]["cnt"] > 0:
+        if key in existing_keys:
             skipped += 1
             continue
-
-        sql = """
-            INSERT INTO alerts (alert_time, report_date, alert_type, alert_level, stock_code, stock_name, holder_type, message)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """
-        execute_sql(sql, (
-            alert.get("report_date"),
-            alert.get("report_date"),
+        existing_keys.add(key)
+        rows.append((
+            alert.get("report_date"), alert.get("report_date"),
             alert["alert_type"], alert["alert_level"],
             alert.get("stock_code"), alert.get("stock_name"),
-            alert.get("holder_type"), alert["message"]
+            alert.get("holder_type"), alert["message"],
         ))
-        inserted += 1
+
+    if rows:
+        with get_connection() as conn:
+            conn.executemany(insert_sql, rows)
+        inserted = len(rows)
 
     logger.info(f"[Alert] Total alerts generated: {len(all_alerts)}, inserted: {inserted}, skipped (duplicate): {skipped}")
     return all_alerts

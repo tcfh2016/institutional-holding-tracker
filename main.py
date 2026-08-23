@@ -10,12 +10,13 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from config.settings import DATA_DIR, TRACKED_INDICES
-from database.db_manager import init_database
-from ingestion.index_components import ingest_index_components, get_index_stock_codes
+from config.settings import DATA_DIR
+from database.db_manager import init_database, get_tracked_stock_codes
+from ingestion.index_components import ingest_index_components
 from ingestion.top_holders import ingest_all_top_holders
 from ingestion.institutional_research import ingest_institutional_research
 from ingestion.market_data import ingest_daily_prices, sync_stocks_from_index_components
+from ingestion.institutional_scan import scan_institutional_holdings
 from cleansing.holder_classifier import init_holder_mappings, update_top_holders_type
 from analysis.holding_changes import compute_all_holding_changes, compute_all_index_summaries
 from reporting.quarterly_report import generate_quarterly_report
@@ -38,6 +39,9 @@ def run_pipeline(
     research_full_market: bool = False,
     price_start_date: str = None,
     price_end_date: str = None,
+    holders_report_dates: list = None,
+    scan_report_date: str = None,
+    scan_resume: bool = False,
 ):
     """
     执行完整数据流水线
@@ -62,32 +66,40 @@ def run_pipeline(
     if "index" in stages:
         logger.info("\n[2/9] 采集指数成分股...")
         ingest_index_components()
-        stock_codes = get_index_stock_codes()
-        logger.info(f"    共获取 {len(stock_codes)} 只成分股")
+        stock_codes = get_tracked_stock_codes()
+        logger.info(f"    共获取 {len(stock_codes)} 只跟踪股票（指数成分 + 机构持仓）")
     else:
-        # 从数据库读取已有的成分股
-        from database.db_manager import query_sql
-        rows = query_sql("SELECT DISTINCT stock_code FROM index_components")
-        stock_codes = [r["stock_code"] for r in rows]
+        # 从数据库读取已有的跟踪股票池（指数成分 ∪ 机构持仓）
+        stock_codes = get_tracked_stock_codes()
     
-    if not stock_codes:
+    if not stock_codes and "scan-holdings" not in stages:
         logger.error("❌ 没有获取到任何成分股代码，流水线终止。")
         return
 
+    # 2.5 全市场机构持仓扫描（独立季度命令，不进入默认流水线）
+    if "scan-holdings" in stages:
+        logger.info("\n[2.5/10] 全市场机构持仓扫描...")
+        init_database()  # 幂等：确保 institutional_holdings 表存在
+        scan_institutional_holdings(
+            report_date=scan_report_date or "20260630",
+            resume=scan_resume,
+        )
+        if not stock_codes:
+            stock_codes = get_tracked_stock_codes()
+            logger.info(f"    扫描后跟踪股票池: {len(stock_codes)} 只")
+
     if "stocks" in stages or "holders" in stages or "research" in stages:
         logger.info("\n[3/10] 同步股票基础信息...")
-        sync_stocks_from_index_components()
+        sync_stocks_from_index_components(include_institutional=True)
     
     # 3. 采集十大股东
     if "holders" in stages:
         logger.info("\n[4/10] 采集十大股东/十大流通股东...")
-        # 为演示速度，这里只取前 50 只作为示例
-        # 实际使用时可以去掉切片
         sample_codes = stock_codes
         logger.info(f"    本次采样 {len(sample_codes)} 只股票（演示模式）")
         ingest_all_top_holders(
             sample_codes,
-            report_dates=["20260630"],
+            report_dates=holders_report_dates or ["20260630"],
             force_refresh=force_refresh,
         )
     
@@ -162,8 +174,8 @@ def run_pipeline(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="A股大机构持仓跟踪系统")
     parser.add_argument("--stage", nargs="+", choices=["init", "index", "stocks", "holders", "research", 
-                        "prices", "classify", "analyze", "report", "alert", "check"],
-                        help="指定要运行的阶段，不指定则运行全部")
+                        "prices", "classify", "analyze", "report", "alert", "check", "scan-holdings"],
+                        help="指定要运行的阶段，不指定则运行全部（scan-holdings 为独立季度命令，不进入默认全量）")
     parser.add_argument("--check", action="store_true", help="仅运行数据完整性检查（等价于 --stage check）")
     parser.add_argument("--init-only", action="store_true", help="仅初始化数据库和映射表")
     parser.add_argument(
@@ -192,8 +204,27 @@ if __name__ == "__main__":
         "--price-end-date",
         help="行情采集结束日期，格式 YYYYMMDD；默认今天",
     )
+    parser.add_argument(
+        "--holders-report-dates",
+        help="十大股东补采报告期列表，逗号分隔 YYYYMMDD，如 20241231,20250331,20250630；用于新纳入股票补采历史持仓数据",
+    )
+    parser.add_argument(
+        "--scan-report-date",
+        help="全市场机构持仓扫描报告期，格式 YYYYMMDD；默认 20260630",
+    )
+    parser.add_argument(
+        "--scan-resume",
+        action="store_true",
+        help="断点续扫：跳过当天已扫描过的股票",
+    )
     
     args = parser.parse_args()
+
+    holders_report_dates = None
+    if args.holders_report_dates:
+        holders_report_dates = [
+            d.strip() for d in args.holders_report_dates.split(",") if d.strip()
+        ]
     
     if args.check:
         run_integrity_check()
@@ -210,6 +241,9 @@ if __name__ == "__main__":
             research_full_market=args.research_full_market,
             price_start_date=args.price_start_date,
             price_end_date=args.price_end_date,
+            holders_report_dates=holders_report_dates,
+            scan_report_date=args.scan_report_date,
+            scan_resume=args.scan_resume,
         )
     else:
         run_pipeline(
@@ -219,4 +253,7 @@ if __name__ == "__main__":
             research_full_market=args.research_full_market,
             price_start_date=args.price_start_date,
             price_end_date=args.price_end_date,
+            holders_report_dates=holders_report_dates,
+            scan_report_date=args.scan_report_date,
+            scan_resume=args.scan_resume,
         )

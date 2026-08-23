@@ -24,7 +24,7 @@ init_database()
 # 页面标题
 # ============================================================
 st.title("📊 A股大机构持仓跟踪系统")
-st.caption("跟踪国家队、保险、社保、QFII等在核心指数成分股中的持仓变化，并关注机构调研行为")
+st.caption("跟踪国家队、保险、社保、QFII等在核心指数成分股及机构持仓个股中的持仓变化，并关注机构调研行为")
 
 # ============================================================
 # 全局数据：可用报告期（持仓总览选择器与国家队默认值来源）
@@ -371,7 +371,8 @@ with tab3:
         
         sql = """
             SELECT stock_code, stock_name, holder_type, 
-                   total_market_value, change_market_value, change_status, report_date
+                   total_hold_shares, total_market_value,
+                   change_shares, change_market_value, change_status, report_date
             FROM holding_changes_summary
             WHERE holder_type IN ('证金公司', '汇金公司', '证金资管计划')
               {date_filter}
@@ -391,22 +392,40 @@ with tab3:
         df_gjd = query_df(sql, params)
         
         if not df_gjd.empty:
-            df_gjd["mv_亿"] = df_gjd["total_market_value"] / 1e8
+            # 期末口径（与数据库一致）：退出记录当期已清仓，市值/持股数均为 0
+            df_gjd["end_mv_亿"] = df_gjd["total_market_value"] / 1e8
             df_gjd["chg_亿"] = df_gjd["change_market_value"] / 1e8
+            df_gjd["end_hold_wan"] = df_gjd["total_hold_shares"] / 1e4
+            df_gjd["chg_shares_wan"] = df_gjd["change_shares"] / 1e4
+            df_gjd[["end_mv_亿", "chg_亿", "end_hold_wan", "chg_shares_wan"]] = df_gjd[
+                ["end_mv_亿", "chg_亿", "end_hold_wan", "chg_shares_wan"]].round(2)
             
-            # 柱状图（过滤空 stock_name）
-            df_plot = df_gjd[df_gjd["stock_name"].notna() & (df_gjd["stock_name"] != "")].copy()
+            # 柱状图（仅展示当前实际持仓：期末市值 > 0 且股票名称非空）
+            df_plot = df_gjd[(df_gjd["end_mv_亿"] > 0) 
+                             & df_gjd["stock_name"].notna() 
+                             & (df_gjd["stock_name"] != "")].copy()
             if not df_plot.empty:
-                fig = px.bar(df_plot, x="stock_name", y="mv_亿", color="holder_type",
-                            title="国家队持仓市值 Top 个股（亿元）",
-                            labels={"stock_name": "股票", "mv_亿": "持仓市值(亿)", "holder_type": "机构类型"},
+                fig = px.bar(df_plot, x="stock_name", y="end_mv_亿", color="holder_type",
+                            title="国家队持仓市值 Top 个股（期末，亿元）",
+                            labels={"stock_name": "股票", "end_mv_亿": "期末市值(亿)", "holder_type": "机构类型"},
                             barmode="group")
                 st.plotly_chart(fig, width='stretch')
             else:
                 st.info("暂无国家队持仓个股数据。")
             
-            st.dataframe(df_gjd[["stock_code", "stock_name", "holder_type", "mv_亿", "chg_亿", "change_status", "report_date"]].rename(
-                columns={"report_date": "报告期"}
+            st.dataframe(df_gjd[["stock_code", "stock_name", "holder_type", "end_mv_亿", "chg_亿",
+                                 "end_hold_wan", "chg_shares_wan", "change_status", "report_date"]].rename(
+                columns={
+                    "stock_code": "股票代码",
+                    "stock_name": "股票名称",
+                    "holder_type": "机构类型",
+                    "end_mv_亿": "期末市值(亿)",
+                    "chg_亿": "市值增减(亿)",
+                    "end_hold_wan": "期末持股数(万股)",
+                    "chg_shares_wan": "持股增减(万股)",
+                    "change_status": "变动状态",
+                    "report_date": "报告期",
+                }
             ), width='stretch')
         else:
             st.info("暂无国家队持仓数据。")
