@@ -18,6 +18,7 @@ data/*.sqlite
 data/*.sqlite3
 data/logs/*
 data/reports/*
+data/report_*.md
 
 # Secrets and local configuration
 *.pem
@@ -27,9 +28,18 @@ data/reports/*
 
 # Notebook runtime output
 .ipynb_checkpoints/
+*.ipynb
 
 # OS and editor files
 .DS_Store
 Thumbs.db
 .idea/
 .codebuddy/
+
+# 一次性任务记录（问题已修复，不入库）
+KNOWN_ISSUES.md
+
+# 一次性运维/调试脚本
+clear_analysis.py
+clear_tables.py
+verify_data.py
