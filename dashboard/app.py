@@ -311,7 +311,8 @@ with tab2:
     
     if stock_code:
         sql = """
-            SELECT report_date, holder_type, total_market_value, change_market_value, change_status
+            SELECT report_date, holder_type, total_hold_shares, total_market_value,
+                   change_shares, change_market_value, change_status
             FROM holding_changes_summary
             WHERE stock_code = ?
             ORDER BY report_date DESC
@@ -322,13 +323,32 @@ with tab2:
             # 显示股票标题（代码 + 名称）
             title_text = f"{stock_code} {stock_name_display} 机构持仓市值变化趋势" if stock_name_display else f"{stock_code} 机构持仓市值变化趋势"
             
+            # 保留趋势图用的 mv_亿 列
             df_stock["mv_亿"] = df_stock["total_market_value"] / 1e8
             fig = px.line(df_stock, x="report_date", y="mv_亿", color="holder_type",
                          title=title_text,
                          markers=True)
             st.plotly_chart(fig, width='stretch')
             
-            st.dataframe(df_stock, width='stretch')
+            # 参照国家队 Tab 展示：换算单位并输出中文表头
+            display_df = df_stock.copy()
+            # 无上期数据的变动列补 0，避免显示 NaN
+            display_df["change_market_value"] = display_df["change_market_value"].fillna(0)
+            display_df["change_shares"] = display_df["change_shares"].fillna(0)
+            
+            display_df["期末市值(亿)"] = (display_df["total_market_value"] / 1e8).round(2)
+            display_df["市值增减(亿)"] = (display_df["change_market_value"] / 1e8).round(2)
+            display_df["期末持股数(万股)"] = (display_df["total_hold_shares"] / 1e4).round(2)
+            display_df["持股增减(万股)"] = (display_df["change_shares"] / 1e4).round(2)
+            
+            display_df = display_df[["holder_type", "期末市值(亿)", "市值增减(亿)",
+                                     "期末持股数(万股)", "持股增减(万股)",
+                                     "change_status", "report_date"]].rename(columns={
+                "holder_type": "机构类型",
+                "change_status": "变动状态",
+                "report_date": "报告期",
+            })
+            st.dataframe(display_df, width='stretch')
         else:
             name_part = f" {stock_name_display}" if stock_name_display else ""
             st.info(f"未找到 {stock_code}{name_part} 的机构持仓数据。")
