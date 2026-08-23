@@ -13,7 +13,6 @@ from pypinyin import lazy_pinyin
 
 from database.db_manager import query_df, init_database
 from reporting.quarterly_report import generate_quarterly_report
-from config.settings import TRACKED_INDICES
 from analysis.research_candidates import get_research_candidates
 
 st.set_page_config(page_title="A股大机构持仓跟踪", layout="wide")
@@ -28,30 +27,10 @@ st.title("📊 A股大机构持仓跟踪系统")
 st.caption("跟踪国家队、保险、社保、QFII等在核心指数成分股中的持仓变化，并关注机构调研行为")
 
 # ============================================================
-# 侧边栏
+# 全局数据：可用报告期（持仓总览选择器与国家队默认值来源）
 # ============================================================
-st.sidebar.header("🔍 筛选条件")
-
-# 获取可用的报告期
 dates_df = query_df("SELECT DISTINCT report_date FROM holding_changes_summary ORDER BY report_date DESC")
 available_dates = dates_df["report_date"].tolist() if not dates_df.empty else []
-
-if available_dates:
-    selected_date = st.sidebar.selectbox("选择报告期", available_dates)
-else:
-    selected_date = None
-    st.sidebar.info("暂无报告期数据，请先运行数据采集。")
-
-selected_holder_type = st.sidebar.multiselect(
-    "机构类型",
-    ["证金公司", "汇金公司", "证金资管计划", "保险", "社保基金", "QFII", "北向资金", "券商", "信托"],
-    default=["证金公司", "汇金公司", "保险", "社保基金", "QFII"]
-)
-
-selected_index = st.sidebar.selectbox(
-    "所属指数",
-    ["全部"] + list(TRACKED_INDICES.keys())
-)
 
 # ============================================================
 # 主页面 - Tab 布局
@@ -62,22 +41,45 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 
 # ---------- Tab 1: 持仓总览 ----------
 with tab1:
+    # 报告期选择器与生成报告按钮（原侧边栏控件移入页面）
+    if available_dates:
+        title_col, date_col, btn_col = st.columns([3, 1, 1])
+        with title_col:
+            st.subheader("📊 机构持仓总览")
+        with date_col:
+            selected_date = st.selectbox("选择报告期", available_dates)
+        with btn_col:
+            st.write("")
+            report_clicked = st.button("📝 生成季度报告")
+    else:
+        selected_date = None
+        report_clicked = False
+        st.info("暂无报告期数据，请先运行数据采集。")
+
     if selected_date:
-        st.subheader(f"{selected_date} 机构持仓总览")
-        
+        st.caption(f"当前报告期：{selected_date}，展示全部机构类型汇总")
+
+        if report_clicked:
+            with st.spinner("正在生成报告..."):
+                report = generate_quarterly_report(selected_date)
+            st.success("报告已生成！")
+            st.download_button(
+                label="下载 Markdown 报告",
+                data=report,
+                file_name=f"持仓报告_{selected_date}.md",
+                mime="text/markdown"
+            )
+
         col1, col2, col3 = st.columns(3)
-        
+
         sql = """
             SELECT holder_type, SUM(total_market_value) as mv, SUM(change_market_value) as chg
             FROM holding_changes_summary
-            WHERE report_date = ? AND holder_type IN ({placeholders})
+            WHERE report_date = ?
             GROUP BY holder_type
             ORDER BY mv DESC
         """
-        placeholders = ",".join(["?"] * len(selected_holder_type)) if selected_holder_type else "''"
-        sql = sql.format(placeholders=placeholders)
-        params = (selected_date,) + tuple(selected_holder_type)
-        df = query_df(sql, params)
+        df = query_df(sql, (selected_date,))
         
         if not df.empty:
             total_mv = df["mv"].sum()
@@ -90,10 +92,9 @@ with tab1:
             stock_sql = """
                 SELECT COUNT(DISTINCT stock_code) as stock_count
                 FROM holding_changes_summary
-                WHERE report_date = ? AND holder_type IN ({placeholders})
+                WHERE report_date = ?
             """
-            stock_sql = stock_sql.format(placeholders=placeholders)
-            stock_count = query_df(stock_sql, params)["stock_count"].iloc[0] or 0
+            stock_count = query_df(stock_sql, (selected_date,))["stock_count"].iloc[0] or 0
             col3.metric("覆盖股票数", f"{stock_count} 只")
             
             df["mv_亿"] = df["mv"] / 1e8
@@ -121,11 +122,10 @@ with tab1:
                        SUM(change_market_value) AS change_mv,
                        SUM(total_hold_shares)   AS total_shares
                 FROM holding_changes_summary
-                WHERE report_date = ? AND holder_type IN ({placeholders})
+                WHERE report_date = ?
                 GROUP BY stock_code, stock_name
             """
-            stock_sql = stock_sql.format(placeholders=placeholders)
-            stock_df = query_df(stock_sql, params)
+            stock_df = query_df(stock_sql, (selected_date,))
             
             if not stock_df.empty:
                 # 无上期数据的变动市值补 0，避免排序与绘图出错
@@ -313,13 +313,10 @@ with tab2:
         sql = """
             SELECT report_date, holder_type, total_market_value, change_market_value, change_status
             FROM holding_changes_summary
-            WHERE stock_code = ? AND holder_type IN ({placeholders})
+            WHERE stock_code = ?
             ORDER BY report_date DESC
         """
-        placeholders = ",".join(["?"] * len(selected_holder_type)) if selected_holder_type else "''"
-        sql = sql.format(placeholders=placeholders)
-        params = (stock_code,) + tuple(selected_holder_type)
-        df_stock = query_df(sql, params)
+        df_stock = query_df(sql, (stock_code,))
         
         if not df_stock.empty:
             # 显示股票标题（代码 + 名称）
@@ -346,7 +343,7 @@ with tab3:
         selected_status = st.multiselect("变动状态", status_options, default=["全部"])
         
         # 报告期多选（默认选中当前选定的报告期）
-        all_report_dates = available_dates  # 从侧边栏获取所有可用报告期
+        all_report_dates = available_dates  # 全部可用报告期
         selected_dates = st.multiselect(
             "选择报告期", 
             all_report_dates, 
@@ -520,20 +517,4 @@ with tab5:
     else:
         st.info("暂无预警记录。")
 
-# ============================================================
-# 底部：生成报告按钮
-# ============================================================
-st.sidebar.markdown("---")
-if st.sidebar.button("📝 生成季度报告"):
-    if selected_date:
-        with st.spinner("正在生成报告..."):
-            report = generate_quarterly_report(selected_date)
-            st.sidebar.success("报告已生成！")
-            st.sidebar.download_button(
-                label="下载 Markdown 报告",
-                data=report,
-                file_name=f"持仓报告_{selected_date}.md",
-                mime="text/markdown"
-            )
-    else:
-        st.sidebar.warning("请先选择报告期")
+
