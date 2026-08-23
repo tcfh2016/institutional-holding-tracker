@@ -85,7 +85,16 @@ with tab1:
             
             col1.metric("机构合计持仓市值", f"¥{total_mv/1e8:.1f}亿", f"{total_chg/1e8:+.1f}亿")
             col2.metric("监控机构类型数", f"{df['holder_type'].nunique()} 类")
-            col3.metric("覆盖股票数", f"{df.shape[0]} 只")
+            
+            # 覆盖股票数应统计持仓记录中的不同股票数量
+            stock_sql = """
+                SELECT COUNT(DISTINCT stock_code) as stock_count
+                FROM holding_changes_summary
+                WHERE report_date = ? AND holder_type IN ({placeholders})
+            """
+            stock_sql = stock_sql.format(placeholders=placeholders)
+            stock_count = query_df(stock_sql, params)["stock_count"].iloc[0] or 0
+            col3.metric("覆盖股票数", f"{stock_count} 只")
             
             df["mv_亿"] = df["mv"] / 1e8
             df["chg_亿"] = df["chg"] / 1e8
@@ -98,6 +107,123 @@ with tab1:
             st.dataframe(df[["holder_type", "mv_亿", "chg_亿"]].rename(
                 columns={"mv_亿": "持仓市值(亿)", "chg_亿": "变动市值(亿)"}
             ), width='stretch')
+            
+            # ============================================================
+            # 股票持仓明细区块
+            # ============================================================
+            st.markdown("---")
+            st.subheader("📋 股票持仓明细")
+            
+            # 按股票汇总查询：一次取回全部股票，避免循环查询
+            stock_sql = """
+                SELECT stock_code, stock_name,
+                       SUM(total_market_value) AS total_mv,
+                       SUM(change_market_value) AS change_mv,
+                       SUM(total_hold_shares)   AS total_shares
+                FROM holding_changes_summary
+                WHERE report_date = ? AND holder_type IN ({placeholders})
+                GROUP BY stock_code, stock_name
+            """
+            stock_sql = stock_sql.format(placeholders=placeholders)
+            stock_df = query_df(stock_sql, params)
+            
+            if not stock_df.empty:
+                # 无上期数据的变动市值补 0，避免排序与绘图出错
+                stock_df["change_mv"] = stock_df["change_mv"].fillna(0)
+                stock_df["total_shares"] = stock_df["total_shares"].fillna(0)
+                
+                # 市值换算为亿元
+                stock_df["total_mv_亿"] = stock_df["total_mv"] / 1e8
+                stock_df["change_mv_亿"] = stock_df["change_mv"] / 1e8
+                
+                # ---- Top10 持仓市值图 ----
+                # 固定按持仓市值取 Top10，不受排序切换影响
+                top10_mv = stock_df.sort_values("total_mv", ascending=False).head(10)
+                fig_mv = px.bar(
+                    top10_mv,
+                    x="total_mv_亿",
+                    y="stock_name",
+                    orientation="h",
+                    title="Top10 持仓市值（亿元）",
+                    labels={"total_mv_亿": "持仓市值（亿）", "stock_name": "股票"},
+                    color="total_mv_亿",
+                    color_continuous_scale="Blues",
+                    text="total_mv_亿",
+                )
+                fig_mv.update_traces(texttemplate="%{text:.1f}", textposition="outside")
+                fig_mv.update_layout(coloraxis_showscale=False, yaxis=dict(autorange="reversed"))
+                st.plotly_chart(fig_mv, width='stretch')
+                
+                # ---- Top10 增持/减持双图 ----
+                add_df = stock_df[stock_df["change_mv"] > 0].nlargest(10, "change_mv")
+                reduce_df = stock_df[stock_df["change_mv"] < 0].nsmallest(10, "change_mv")
+                
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    if not add_df.empty:
+                        fig_add = px.bar(
+                            add_df,
+                            x="change_mv_亿",
+                            y="stock_name",
+                            orientation="h",
+                            title="增持 Top10（亿元）",
+                            labels={"change_mv_亿": "变动市值（亿）", "stock_name": "股票"},
+                            color="change_mv_亿",
+                            color_continuous_scale="Greens",
+                            text="change_mv_亿",
+                        )
+                        fig_add.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+                        fig_add.update_layout(coloraxis_showscale=False, yaxis=dict(autorange="reversed"))
+                        st.plotly_chart(fig_add, width='stretch')
+                    else:
+                        st.info("暂无增持数据")
+                
+                with col_b:
+                    if not reduce_df.empty:
+                        fig_red = px.bar(
+                            reduce_df.sort_values("change_mv", ascending=False),
+                            x="change_mv_亿",
+                            y="stock_name",
+                            orientation="h",
+                            title="减持 Top10（亿元）",
+                            labels={"change_mv_亿": "变动市值（亿）", "stock_name": "股票"},
+                            color="change_mv_亿",
+                            color_continuous_scale="Reds",
+                            text="change_mv_亿",
+                        )
+                        fig_red.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+                        fig_red.update_layout(coloraxis_showscale=False, yaxis=dict(autorange="reversed"))
+                        st.plotly_chart(fig_red, width='stretch')
+                    else:
+                        st.info("暂无减持数据")
+                
+                # ---- 全量明细表格 ----
+                st.markdown("#### 全部股票明细")
+                
+                # 表格排序切换控件，仅控制下方明细表格
+                sort_option = st.radio(
+                    "表格排序方式",
+                    ["持仓市值", "变动市值", "股票代码"],
+                    horizontal=True,
+                )
+                if sort_option == "持仓市值":
+                    stock_sorted = stock_df.sort_values("total_mv", ascending=False)
+                elif sort_option == "变动市值":
+                    stock_sorted = stock_df.sort_values("change_mv", ascending=False)
+                else:
+                    stock_sorted = stock_df.sort_values("stock_code")
+                
+                table_df = stock_sorted[["stock_code", "stock_name", "total_mv_亿", "change_mv_亿", "total_shares"]].copy()
+                table_df["持股数量(亿股)"] = (table_df["total_shares"] / 1e8).round(2)
+                table_df = table_df.drop(columns=["total_shares"]).rename(columns={
+                    "stock_code": "股票代码",
+                    "stock_name": "股票名称",
+                    "total_mv_亿": "持仓市值(亿)",
+                    "change_mv_亿": "变动市值(亿)",
+                })
+                st.dataframe(table_df, width='stretch')
+            else:
+                st.info("该报告期暂无股票明细数据。")
         else:
             st.info("该报告期暂无数据。")
     else:

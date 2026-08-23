@@ -32,3 +32,4 @@ data/reports/*
 .DS_Store
 Thumbs.db
 .idea/
+.codebuddy/
