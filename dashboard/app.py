@@ -73,7 +73,8 @@ with tab1:
         col1, col2, col3 = st.columns(3)
 
         sql = """
-            SELECT holder_type, SUM(total_market_value) as mv, SUM(change_market_value) as chg
+            SELECT holder_type, SUM(total_market_value) as mv, SUM(change_market_value) as chg,
+                   SUM(total_hold_shares) as shares, SUM(change_shares) as chg_shares
             FROM holding_changes_summary
             WHERE report_date = ?
             GROUP BY holder_type
@@ -82,6 +83,11 @@ with tab1:
         df = query_df(sql, (selected_date,))
         
         if not df.empty:
+            # 无上期数据的变动字段补 0，避免指标卡与表格显示 NaN
+            df["chg"] = df["chg"].fillna(0)
+            df["shares"] = df["shares"].fillna(0)
+            df["chg_shares"] = df["chg_shares"].fillna(0)
+            
             total_mv = df["mv"].sum()
             total_chg = df["chg"].sum()
             
@@ -99,14 +105,17 @@ with tab1:
             
             df["mv_亿"] = df["mv"] / 1e8
             df["chg_亿"] = df["chg"] / 1e8
+            df["shares_万股"] = (df["shares"] / 1e4).round(2)
+            df["chg_shares_万股"] = (df["chg_shares"] / 1e4).round(2)
             fig = px.bar(df, x="holder_type", y="mv_亿", color="chg_亿",
                         title="各机构类型持仓市值（亿元）",
                         labels={"holder_type": "机构类型", "mv_亿": "持仓市值（亿）", "chg_亿": "变动（亿）"},
                         color_continuous_scale="RdYlGn")
             st.plotly_chart(fig, width='stretch')
             
-            st.dataframe(df[["holder_type", "mv_亿", "chg_亿"]].rename(
-                columns={"mv_亿": "持仓市值(亿)", "chg_亿": "变动市值(亿)"}
+            st.dataframe(df[["holder_type", "mv_亿", "chg_亿", "shares_万股", "chg_shares_万股"]].rename(
+                columns={"mv_亿": "持仓市值(亿)", "chg_亿": "变动市值(亿)",
+                         "shares_万股": "期末持股数(万股)", "chg_shares_万股": "持股增减(万股)"}
             ), width='stretch')
             
             # ============================================================
@@ -120,7 +129,8 @@ with tab1:
                 SELECT stock_code, stock_name,
                        SUM(total_market_value) AS total_mv,
                        SUM(change_market_value) AS change_mv,
-                       SUM(total_hold_shares)   AS total_shares
+                       SUM(total_hold_shares)   AS total_shares,
+                       SUM(change_shares)       AS change_shares
                 FROM holding_changes_summary
                 WHERE report_date = ?
                 GROUP BY stock_code, stock_name
@@ -128,9 +138,10 @@ with tab1:
             stock_df = query_df(stock_sql, (selected_date,))
             
             if not stock_df.empty:
-                # 无上期数据的变动市值补 0，避免排序与绘图出错
+                # 无上期数据的变动字段补 0，避免排序与绘图出错
                 stock_df["change_mv"] = stock_df["change_mv"].fillna(0)
                 stock_df["total_shares"] = stock_df["total_shares"].fillna(0)
+                stock_df["change_shares"] = stock_df["change_shares"].fillna(0)
                 
                 # 市值换算为亿元
                 stock_df["total_mv_亿"] = stock_df["total_mv"] / 1e8
@@ -213,9 +224,12 @@ with tab1:
                 else:
                     stock_sorted = stock_df.sort_values("stock_code")
                 
-                table_df = stock_sorted[["stock_code", "stock_name", "total_mv_亿", "change_mv_亿", "total_shares"]].copy()
-                table_df["持股数量(亿股)"] = (table_df["total_shares"] / 1e8).round(2)
-                table_df = table_df.drop(columns=["total_shares"]).rename(columns={
+                table_df = stock_sorted[["stock_code", "stock_name", "total_mv_亿", "change_mv_亿",
+                                          "total_shares", "change_shares"]].copy()
+                # 持股数量与增减统一为万股口径，与其他页面一致
+                table_df["期末持股数(万股)"] = (table_df["total_shares"] / 1e4).round(2)
+                table_df["持股增减(万股)"] = (table_df["change_shares"] / 1e4).round(2)
+                table_df = table_df.drop(columns=["total_shares", "change_shares"]).rename(columns={
                     "stock_code": "股票代码",
                     "stock_name": "股票名称",
                     "total_mv_亿": "持仓市值(亿)",
