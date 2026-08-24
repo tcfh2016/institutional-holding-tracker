@@ -11,6 +11,7 @@ import pandas as pd
 import requests
 
 from database.db_manager import query_sql, table_exists, upsert_df
+from ingestion.market_data import normalize_stock_name
 from config.settings import REQUEST_DELAY
 
 logger = logging.getLogger(__name__)
@@ -168,6 +169,8 @@ def _normalize_research_df(df: pd.DataFrame) -> pd.DataFrame:
 
     normalized = normalized[keep_cols]
     normalized["stock_code"] = normalized["stock_code"].astype(str).str.zfill(6)
+    if "stock_name" in normalized.columns:
+        normalized["stock_name"] = normalized["stock_name"].apply(normalize_stock_name)
     normalized["institution_name"] = normalized["institution_name"].fillna("未披露")
     normalized["institution_type"] = normalized["institution_type"].fillna("未披露")
     normalized = normalized.dropna(subset=["stock_code", "survey_date"])

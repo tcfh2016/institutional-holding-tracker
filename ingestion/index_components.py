@@ -7,6 +7,7 @@ import pandas as pd
 import akshare as ak
 
 from ingestion.base import retry_on_error, safe_request
+from ingestion.market_data import normalize_stock_name
 from database.db_manager import upsert_df, query_sql, execute_sql
 from config.settings import TRACKED_INDICES
 
@@ -130,6 +131,9 @@ def ingest_index_components():
         for col in ["stock_code", "stock_name", "weight", "index_code", "effective_date"]:
             if col not in df.columns:
                 df[col] = None
+        
+        # 清理股票名称中的临时性前缀（XD/XR/DR/N）
+        df["stock_name"] = df["stock_name"].apply(normalize_stock_name)
         
         # 写入数据库（先删除该指数旧版本，保持单快照，避免每天堆积重复记录）
         try:

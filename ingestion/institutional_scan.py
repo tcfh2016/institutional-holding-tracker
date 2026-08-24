@@ -12,6 +12,7 @@ import akshare as ak
 
 from ingestion.base import safe_request
 from ingestion.top_holders import fetch_top_holders_em
+from ingestion.market_data import normalize_stock_name
 from cleansing.holder_classifier import classify_holders_batch
 from database.db_manager import query_sql, upsert_df, execute_sql
 
@@ -41,10 +42,10 @@ def get_all_a_stock_codes() -> List[Dict[str, str]]:
         # 排除北交所（4/8/92 开头）
         if code.startswith(("4", "8", "92")):
             continue
-        # 排除 ST/退市
+        # 排除 ST/退市（在去除临时前缀前判断，避免误删 ST 状态）
         if "ST" in name.upper() or "退" in name:
             continue
-        stocks.append({"stock_code": code, "stock_name": name})
+        stocks.append({"stock_code": code, "stock_name": normalize_stock_name(name)})
     return stocks
 
 
@@ -133,7 +134,7 @@ def scan_institutional_holdings(report_date: str = "20260630", resume: bool = Fa
                 execute_sql(
                     """INSERT INTO stocks (stock_code, stock_name) VALUES (?, ?)
                        ON CONFLICT(stock_code) DO UPDATE SET stock_name = excluded.stock_name""",
-                    (code, stock["stock_name"]),
+                    (code, normalize_stock_name(stock["stock_name"])),
                 )
             else:
                 no_inst += 1

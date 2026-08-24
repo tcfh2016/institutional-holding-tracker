@@ -23,6 +23,30 @@ def _to_sina_symbol(stock_code: str) -> str:
     return stock_code
 
 
+def normalize_stock_name(name: str) -> str:
+    """
+    清理股票名称中的临时性前缀。
+
+    A 股在特定交易日会在名称前附加临时标记：
+      - XD：除息
+      - XR：除权
+      - DR：除权除息
+      - N ：上市首日
+    这些前缀具有时效性，不应长期保留在股票名称中。
+
+    注意：ST / *ST 是风险警示状态，不属于临时前缀，予以保留。
+    """
+    if not isinstance(name, str):
+        return name
+    name = name.strip()
+    # 仅去除开头的临时性前缀（不区分大小写）
+    for prefix in ("XD", "XR", "DR", "N"):
+        if name.upper().startswith(prefix):
+            name = name[len(prefix):].strip()
+            break
+    return name
+
+
 def fetch_stock_daily(stock_code: str, start_date: str, end_date: str,
                       label: str = None) -> pd.DataFrame:
     """获取个股日度行情（主接口失败自动切备选）
@@ -236,6 +260,7 @@ def ingest_stock_info():
         # 写入 stocks 表（简化版，只有代码和名称）
         if "代码" in df.columns and "名称" in df.columns:
             out = df[["代码", "名称"]].rename(columns={"代码": "stock_code", "名称": "stock_name"})
+            out["stock_name"] = out["stock_name"].apply(normalize_stock_name)
             upsert_df(out, "stocks", ["stock_code"])
             logger.info(f"[StockInfo] Saved {len(out)} stocks.")
             return len(out)
@@ -247,7 +272,7 @@ def ingest_stock_info():
 
 
 def get_stock_name(stock_code: str):
-    """从股票主数据表获取股票名称。"""
+    """从股票主数据表获取股票名称（已去除临时性前缀）。"""
     rows = query_sql(
         """
         SELECT stock_name
@@ -259,7 +284,7 @@ def get_stock_name(stock_code: str):
         """,
         (stock_code,),
     )
-    return rows[0]["stock_name"] if rows else None
+    return normalize_stock_name(rows[0]["stock_name"]) if rows else None
 
 
 def sync_stocks_from_index_components(include_institutional: bool = False):
@@ -299,10 +324,57 @@ def sync_stocks_from_index_components(include_institutional: bool = False):
             ON CONFLICT(stock_code) DO UPDATE SET stock_name = excluded.stock_name
             WHERE stocks.stock_name IS NULL OR stocks.stock_name = ''
             """,
-            [(row["stock_code"], row["stock_name"]) for row in rows],
+            [(row["stock_code"], normalize_stock_name(row["stock_name"])) for row in rows],
         )
     logger.info(
         f"[StockInfo] Synced {len(rows)} stocks "
         f"({'index + institutional' if include_institutional else 'index components'})."
     )
     return len(rows)
+
+
+def clean_historical_stock_name_prefixes():
+    """
+    一次性清理数据库各表中股票名称的临时性前缀（XD/XR/DR/N）。
+
+    由于旧数据可能已在除息/除权/上市首日被污染，运行此函数可修复历史记录。
+    新数据在采集写入时已经过 normalize_stock_name 处理，无需再执行。
+    """
+    tables = [
+        "stocks",
+        "index_components",
+        "institutional_holdings",
+        "top_holders",
+        "holding_changes_summary",
+        "institutional_research",
+    ]
+    prefix_patterns = ("XD%", "XR%", "DR%", "N %")
+
+    total = 0
+    with get_connection() as conn:
+        for table in tables:
+            # 查询可能带前缀的记录
+            placeholders = " OR ".join(["stock_name LIKE ?"] * len(prefix_patterns))
+            rows = conn.execute(
+                f"SELECT stock_code, stock_name FROM {table} WHERE {placeholders}",
+                prefix_patterns,
+            ).fetchall()
+            if not rows:
+                continue
+
+            updates = []
+            for code, name in rows:
+                new_name = normalize_stock_name(name)
+                if new_name != name:
+                    updates.append((new_name, code, name))
+
+            if updates:
+                conn.executemany(
+                    f"UPDATE {table} SET stock_name = ? WHERE stock_code = ? AND stock_name = ?",
+                    updates,
+                )
+                total += len(updates)
+                logger.info(f"[StockInfo] Cleaned {len(updates)} rows in {table}.")
+
+    logger.info(f"[StockInfo] Historical prefix cleanup completed: {total} rows updated.")
+    return total
