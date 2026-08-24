@@ -43,13 +43,17 @@ def retry_on_error(max_retries: int = REQUEST_RETRIES, delay: float = REQUEST_DE
 
 
 def safe_request(func: Callable, *args, verbose_error: bool = True,
-                 fail_log_level: int = logging.ERROR, **kwargs) -> Any:
+                 fail_log_level: int = logging.ERROR,
+                 label: str = None, **kwargs) -> Any:
     """安全调用 akshare 接口，带延迟
 
     fail_log_level: 失败时使用的日志级别，可设为 logging.WARNING 避免 PowerShell 红色输出
+    label: 可选上下文标签（如 "3/5000 600000 浦发银行"），拼接到日志中
+           便于识别当前处理对象并评估进度
     """
+    tag = f" [{label}]" if label else ""
     start = time.perf_counter()
-    logging.info(f"[Request] {func.__name__} started")
+    logging.info(f"[Request] {func.__name__}{tag} started")
 
     # socket 级超时保护：akshare 内部 requests 挂起时快速抛异常进入重试，不再等待数分钟
     prev_timeout = socket.getdefaulttimeout()
@@ -58,14 +62,14 @@ def safe_request(func: Callable, *args, verbose_error: bool = True,
         result = func(*args, **kwargs)
         elapsed = time.perf_counter() - start
         shape = getattr(result, "shape", None)
-        logging.info(f"[Request] {func.__name__} completed in {elapsed:.2f}s, shape={shape}")
+        logging.info(f"[Request] {func.__name__}{tag} completed in {elapsed:.2f}s, shape={shape}")
         time.sleep(REQUEST_DELAY)
         return result
     except Exception as e:
         elapsed = time.perf_counter() - start
         logging.log(
             fail_log_level,
-            f"[Request] {func.__name__} failed after {elapsed:.2f}s: {e}",
+            f"[Request] {func.__name__}{tag} failed after {elapsed:.2f}s: {e}",
         )
         if verbose_error:
             logging.debug(f"[Request] {func.__name__} traceback:", exc_info=True)

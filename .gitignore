@@ -19,6 +19,7 @@ data/*.sqlite3
 data/logs/*
 data/reports/*
 data/report_*.md
+*.log
 
 # Secrets and local configuration
 *.pem
@@ -43,3 +44,8 @@ KNOWN_ISSUES.md
 clear_analysis.py
 clear_tables.py
 verify_data.py
+
+# 部署相关（学习阶段先不提交）
+deploy/
+scripts/
+DEPLOYMENT.md

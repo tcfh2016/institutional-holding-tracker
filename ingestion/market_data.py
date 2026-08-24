@@ -23,14 +23,19 @@ def _to_sina_symbol(stock_code: str) -> str:
     return stock_code
 
 
-def fetch_stock_daily(stock_code: str, start_date: str, end_date: str) -> pd.DataFrame:
-    """获取个股日度行情（主接口失败自动切备选）"""
+def fetch_stock_daily(stock_code: str, start_date: str, end_date: str,
+                      label: str = None) -> pd.DataFrame:
+    """获取个股日度行情（主接口失败自动切备选）
+
+    label: 可选上下文标签（如 "3/5000 600000 浦发银行"），透传给 safe_request 用于日志
+    """
     # 主接口：新浪（需要带交易所前缀）
     try:
         sina_symbol = _to_sina_symbol(stock_code)
         df = safe_request(ak.stock_zh_a_daily, symbol=sina_symbol,
                           start_date=start_date, end_date=end_date, adjust="qfq",
-                          verbose_error=False, fail_log_level=logging.WARNING)
+                          verbose_error=False, fail_log_level=logging.WARNING,
+                          label=label)
         return df if df is not None else pd.DataFrame()
     except Exception:
         pass
@@ -39,7 +44,8 @@ def fetch_stock_daily(stock_code: str, start_date: str, end_date: str) -> pd.Dat
     try:
         df = safe_request(ak.stock_zh_a_hist, symbol=stock_code, period="daily",
                           start_date=start_date, end_date=end_date, adjust="qfq",
-                          verbose_error=False, fail_log_level=logging.WARNING)
+                          verbose_error=False, fail_log_level=logging.WARNING,
+                          label=label)
         return df if df is not None else pd.DataFrame()
     except Exception as e:
         logger.warning(f"[MarketData] Failed to fetch {stock_code}: {e}")
@@ -138,9 +144,18 @@ def ingest_daily_prices(
         f"(range: {req_start} ~ {req_end}, incremental: {incremental})..."
     )
 
+    # 预加载股票名称映射，日志中可直接展示股票信息，避免逐只查库
+    name_rows = query_sql(
+        "SELECT stock_code, stock_name FROM stocks "
+        "WHERE stock_name IS NOT NULL AND stock_name != ''"
+    )
+    name_map = {r["stock_code"]: r["stock_name"] for r in name_rows}
+
     total = 0
     skipped = 0
     for i, code in enumerate(stock_codes, 1):
+        # 进度计数 + 股票代码 + 股票名称，便于实时评估执行进度
+        label = f"{i}/{len(stock_codes)} {code} {name_map.get(code, '')}".strip()
         try:
             fetch_start = req_start
             if incremental:
@@ -157,7 +172,7 @@ def ingest_daily_prices(
                     ).strftime("%Y%m%d")
                     fetch_start = max(next_day, req_start)
 
-            df = fetch_stock_daily(code, fetch_start, effective_end)
+            df = fetch_stock_daily(code, fetch_start, effective_end, label=label)
             if df.empty:
                 continue
 

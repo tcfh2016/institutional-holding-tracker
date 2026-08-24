@@ -47,8 +47,9 @@ REQUEST_DELAY = 0.5  # 请求间隔秒数
 NO_DATA_RECHECK_DAYS = 7
 
 # 演示模式：当网络环境不稳定无法获取实时行情时，使用模拟价格展示看板效果
-# 生产环境请设为 False
-DEMO_MODE = True
+# 未设置环境变量时默认为 True（本地开发演示模式）
+# 生产环境（云服务器部署）请 export DEMO_MODE=false，确保分析不产生模拟数据
+DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"
 
 # 预警阈值
 ALERT_THRESHOLDS = {
