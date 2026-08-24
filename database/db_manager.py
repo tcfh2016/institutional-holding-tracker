@@ -47,8 +47,6 @@ def init_database():
     conn = sqlite3.connect(db_path)
     try:
         conn.executescript(sql)
-        conn.execute("DROP TABLE IF EXISTS northbound_holdings")
-        conn.execute("DROP TABLE IF EXISTS institutional_research_fetch_log")
         
         # 迁移：为 alerts 表添加 report_date 列（兼容旧数据库）
         cursor = conn.execute("PRAGMA table_info(alerts)")
